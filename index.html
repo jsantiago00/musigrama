@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Musicagrama</title>
+
+<!-- PWA: permite "instalar" la app en el celular (ícono + pantalla completa) -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#7c3aed">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Musicagrama">
+<style>
+  :root{
+    --grid-line: #dbe1ea;
+    --paper: #fdfcf7;
+    --ink: #2c2c2c;
+    --ui-bg: rgba(255,255,255,0.85);
+    --ui-border: rgba(0,0,0,0.08);
+  }
+  *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body{
+    margin:0; padding:0; width:100%; height:100%;
+    overscroll-behavior: none;
+    background-color: var(--paper);
+    /* Fondo tipo cuaderno cuadriculado, dibujado con CSS (no ocupa el canvas) */
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 28px 28px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: var(--ink);
+  }
+  #canvas{
+    position: fixed; inset: 0;
+    width: 100vw; height: 100vh;
+    touch-action: none; /* evita scroll/zoom del navegador al dibujar */
+    cursor: crosshair;
+  }
+  #canvas.erasing{ cursor: cell; }
+  .hint{
+    position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+    padding: 8px 16px; border-radius: 20px;
+    background: var(--ui-bg); border: 1px solid var(--ui-border);
+    font-size: 13px; color: #666; pointer-events: none;
+    transition: opacity 0.6s ease;
+    backdrop-filter: blur(4px);
+  }
+  .hint.hidden{ opacity: 0; }
+
+  .toolbar{
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px;
+    padding: 10px 14px; border-radius: 28px;
+    background: var(--ui-bg); border: 1px solid var(--ui-border);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+    backdrop-filter: blur(6px);
+    max-width: min(94vw, 640px);
+  }
+  .btn{
+    display:flex; align-items:center; justify-content:center;
+    width: 42px; height: 42px; border-radius: 50%;
+    border: none; background: transparent; cursor: pointer;
+    color: var(--ink); transition: background 0.15s ease;
+  }
+  .btn:hover{ background: rgba(0,0,0,0.06); }
+  .btn:active{ background: rgba(0,0,0,0.12); }
+  .btn.active{ background: rgba(220,38,38,0.14); color: #b91c1c; }
+  .btn svg{ width: 20px; height: 20px; }
+
+  .control-wrap{
+    display:flex; align-items:center; gap:8px;
+    padding: 0 6px; border-left: 1px solid var(--ui-border);
+  }
+  .control-wrap label{ font-size: 12px; color:#777; white-space:nowrap; }
+  .control-wrap input[type=range]{
+    width: 80px; accent-color: #7c3aed; cursor: pointer;
+  }
+
+  /* Botón de volumen: el slider vive en un popover que aparece al
+     tocar el ícono, para no ocupar un lugar fijo en la toolbar. */
+  .tool-group{ position: relative; }
+  .popover{
+    position: absolute; bottom: 54px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center;
+    padding: 10px 14px; border-radius: 20px;
+    background: var(--ui-bg); border: 1px solid var(--ui-border);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+    backdrop-filter: blur(6px);
+  }
+  .popover[hidden]{ display: none; }
+  .popover input[type=range]{ width: 120px; accent-color: #7c3aed; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div class="hint" id="hint">Dibujá un trazo libre: al cruzar la línea central, sonará ✏️🎵</div>
+
+<div class="toolbar">
+  <button class="btn active" id="pencilBtn" title="Lápiz: dibujar trazos libres" aria-label="Herramienta lápiz">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 20h9"></path>
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+    </svg>
+  </button>
+
+  <button class="btn" id="eraserBtn" title="Goma: borra la parte del trazo que toques" aria-label="Herramienta goma">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M20 20H8.5L3.6 15.1a2 2 0 0 1 0-2.8l7-7a2 2 0 0 1 2.8 0l6 6a2 2 0 0 1 0 2.8L13 20"></path>
+      <path d="M6 15l6 6"></path>
+    </svg>
+  </button>
+
+  <button class="btn" id="clearBtn" title="Limpiar todo" aria-label="Limpiar todo el canvas">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="3 6 5 6 21 6"></polyline>
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+      <path d="M10 11v6"></path><path d="M14 11v6"></path>
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+    </svg>
+  </button>
+
+  <div class="tool-group">
+    <button class="btn" id="muteBtn" title="Volumen" aria-label="Volumen">
+      <svg id="iconSound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="4 9 9 9 13 5 13 19 9 15 4 15 4 9"></polygon>
+        <path d="M16.5 8.5a5 5 0 0 1 0 7"></path>
+        <path d="M19 6a9 9 0 0 1 0 12"></path>
+      </svg>
+      <svg id="iconMute" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+        <polygon points="4 9 9 9 13 5 13 19 9 15 4 15 4 9"></polygon>
+        <line x1="16" y1="9" x2="22" y2="15"></line>
+        <line x1="22" y1="9" x2="16" y2="15"></line>
+      </svg>
+    </button>
+    <div class="popover" id="volumePopover" hidden>
+      <input type="range" id="volumeRange" min="0" max="100" value="80" step="1">
+    </div>
+  </div>
+
+  <div class="control-wrap">
+    <label for="reverbRange">Espacio</label>
+    <input type="range" id="reverbRange" min="0" max="100" value="30" step="1">
+  </div>
+
+  <div class="control-wrap">
+    <label for="delayRange">Eco</label>
+    <input type="range" id="delayRange" min="0" max="100" value="15" step="1">
+  </div>
+
+  <div class="control-wrap">
+    <label for="speedRange">Velocidad</label>
+    <input type="range" id="speedRange" min="20" max="260" value="90" step="10">
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============================================================
+     1) CANVAS: setup, resize y utilidades de dibujo
+     ============================================================ */
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0; // dimensiones lógicas (CSS px), no físicas
+
+  function resizeCanvas(){
+    const dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // trabajamos siempre en coords lógicas
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  /* ============================================================
+     2) MOTOR DE AUDIO (Web Audio API nativa)
+     ============================================================ */
+  let audioCtx = null;
+  let masterGain = null;
+  let reverbSend = null;
+  let delaySend = null;
+  let masterVolume = 0.8; // 0..1, controlado por el slider de volumen (0 = silencio)
+  let reverbAmount = 0.30; // 0..1, controlado por el slider "Espacio"
+  let delayAmount = 0.15;  // 0..1, controlado por el slider "Eco"
+  const REVERB_SEND_MAX = 0.6; // tope del send para que no ahogue el sonido directo
+  const DELAY_SEND_MAX = 0.5;
+
+  // Genera una respuesta al impulso sintética (ruido con decaimiento
+  // exponencial) para el "espacio" (reverb): no hay archivos de audio
+  // externos, así que el ambiente se construye por código.
+  function createImpulseResponse(ctx, duration, decay){
+    const rate = ctx.sampleRate;
+    const length = Math.floor(rate * duration);
+    const impulse = ctx.createBuffer(2, length, rate);
+    for (let ch = 0; ch < 2; ch++){
+      const data = impulse.getChannelData(ch);
+      for (let i = 0; i < length; i++){
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+      }
+    }
+    return impulse;
+  }
+
+  function ensureAudio(){
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = masterVolume;
+
+    // Compresor a la salida: cuando suenan muchas voces a la vez (varios
+    // trazos, varios cruces simultáneos) la suma puede saturar; el
+    // compresor amortigua los picos para que no se rompa el sonido.
+    const compressor = audioCtx.createDynamicsCompressor();
+    compressor.threshold.value = -20;
+    compressor.knee.value = 20;
+    compressor.ratio.value = 10;
+    compressor.attack.value = 0.004;
+    compressor.release.value = 0.2;
+    masterGain.connect(compressor).connect(audioCtx.destination);
+
+    // "Espacio" (reverb): send/return con un convolver. La cantidad de
+    // mezcla la controla reverbSend, ajustable con el slider "Espacio".
+    const convolver = audioCtx.createConvolver();
+    convolver.buffer = createImpulseResponse(audioCtx, 2.2, 2.5);
+    reverbSend = audioCtx.createGain();
+    reverbSend.gain.value = reverbAmount * REVERB_SEND_MAX;
+    masterGain.connect(reverbSend).connect(convolver).connect(compressor);
+
+    // "Eco" (delay con feedback): se repite y decae solo. La cantidad de
+    // mezcla la controla delaySend, ajustable con el slider "Eco".
+    const delayNode = audioCtx.createDelay(1.0);
+    delayNode.delayTime.value = 0.28;
+    const feedbackGain = audioCtx.createGain();
+    feedbackGain.gain.value = 0.35;
+    delayNode.connect(feedbackGain);
+    feedbackGain.connect(delayNode);
+    delaySend = audioCtx.createGain();
+    delaySend.gain.value = delayAmount * DELAY_SEND_MAX;
+    masterGain.connect(delaySend).connect(delayNode).connect(compressor);
+  }
+
+  // Escala pentatónica mayor: cualquier combinación de notas suena bien.
+  const SCALE = [0, 2, 4, 7, 9]; // semitonos relativos a la raíz
+  const OCTAVES = 3;
+  const BASE_FREQ = 220; // A3
+
+  // Mapea una posición Y del canvas a una frecuencia dentro de la escala.
+  // Arriba (y chico) = agudo, abajo (y grande) = grave.
+  function freqForY(y){
+    const steps = SCALE.length * OCTAVES;
+    const t = Math.min(1, Math.max(0, y / H));
+    const stepFromTop = Math.min(steps - 1, Math.floor(t * steps));
+    const stepFromBottom = steps - 1 - stepFromTop;
+    const octave = Math.floor(stepFromBottom / SCALE.length);
+    const semitone = SCALE[stepFromBottom % SCALE.length];
+    const totalSemitones = octave * 12 + semitone;
+    return BASE_FREQ * Math.pow(2, totalSemitones / 12);
+  }
+
+  // Motor de "voces" continuas: en vez de disparar una nota corta por
+  // cada cruce, cada CRUCE de un trazo con el playhead tiene su propia
+  // voz synth (dos osciladores en unísono + filtro lowpass) que queda
+  // ENCENDIDA mientras el playhead recorre ese tramo, deslizando (glide)
+  // el tono para seguir la curva. Un mismo trazo puede cruzar la línea
+  // varias veces a la vez (zigzag, espiral): cada cruce suena por
+  // separado y de forma independiente, no solo el primero detectado.
+  function createVoice(style, y){
+    const now = audioCtx.currentTime;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = style.q;
+    filter.frequency.setValueAtTime(style.filterStart, now);
+
+    const gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    filter.connect(gain).connect(masterGain);
+
+    const oscs = [-style.detune, style.detune].map((detune) => {
+      const osc = audioCtx.createOscillator();
+      osc.type = style.type;
+      osc.detune.value = detune;
+      osc.connect(filter);
+      osc.start(now);
+      return osc;
+    });
+
+    return { oscs, filter, gain, style, active: false, removed: false, lastY: y };
+  }
+
+  // Enciende una voz al detectar un cruce nuevo: ataque rápido de
+  // volumen y el filtro se abre y luego se va cerrando.
+  function voiceEnter(v, y){
+    const now = audioCtx.currentTime;
+    const freq = freqForY(y);
+    v.oscs.forEach(o => o.frequency.setValueAtTime(freq, now));
+    v.gain.gain.cancelScheduledValues(now);
+    v.gain.gain.setValueAtTime(0.0001, now);
+    v.gain.gain.linearRampToValueAtTime(v.style.level, now + 0.025);
+    v.filter.frequency.cancelScheduledValues(now);
+    v.filter.frequency.setValueAtTime(v.style.filterStart, now);
+    v.filter.frequency.exponentialRampToValueAtTime(v.style.filterEnd, now + 1.6);
+    v.active = true;
+    v.lastY = y;
+  }
+
+  // Mientras la voz sigue activa, desliza el tono hacia la nueva
+  // posición Y en vez de saltar: eso es lo que da la sensación de lectura
+  // continua de la línea dibujada.
+  function voiceGlide(v, y){
+    const now = audioCtx.currentTime;
+    const freq = freqForY(y);
+    v.oscs.forEach(o => {
+      o.frequency.cancelScheduledValues(now);
+      o.frequency.setTargetAtTime(freq, now, 0.045);
+    });
+    v.lastY = y;
+  }
+
+  // Apaga la voz con un release corto al salir de la zona del cruce.
+  function voiceExit(v){
+    if (!v.active) return;
+    v.active = false;
+    const now = audioCtx.currentTime;
+    v.gain.gain.cancelScheduledValues(now);
+    v.gain.gain.setValueAtTime(v.gain.gain.value, now);
+    v.gain.gain.linearRampToValueAtTime(0.0001, now + 0.12);
+    const { oscs, filter, gain } = v;
+    setTimeout(() => {
+      oscs.forEach(o => { try { o.stop(); } catch (e) {} o.disconnect(); });
+      filter.disconnect();
+      gain.disconnect();
+      v.removed = true;
+    }, 200);
+  }
+
+  /* ============================================================
+     3) PALETA DE COLORES / TIMBRES ROTATIVOS
+     Cada color de trazo define también su timbre (oscilador + envolvente
+     + filtro). Todos son sonidos sostenidos tipo synth, no plucks cortos.
+     ============================================================ */
+  const STYLES = [
+    { color: '#7c3aed', type: 'sine',     attack: 0.02, hold: 0.05, release: 0.90, level: 0.18, detune: 6,  filterStart: 3000, filterEnd: 800,  q: 0.7 }, // violeta
+    { color: '#f97316', type: 'square',   attack: 0.015,hold: 0.04, release: 0.50, level: 0.10, detune: 8,  filterStart: 2500, filterEnd: 600,  q: 1.0 }, // naranja
+    { color: '#16a34a', type: 'triangle', attack: 0.03, hold: 0.08, release: 1.10, level: 0.16, detune: 5,  filterStart: 3500, filterEnd: 900,  q: 0.5 }, // verde
+    { color: '#dc2626', type: 'sawtooth', attack: 0.01, hold: 0.03, release: 0.60, level: 0.09, detune: 10, filterStart: 2200, filterEnd: 500,  q: 1.2 }, // rojo
+    { color: '#2563eb', type: 'sine',     attack: 0.05, hold: 0.10, release: 1.40, level: 0.18, detune: 4,  filterStart: 4000, filterEnd: 1000, q: 0.4 }, // azul
+    { color: '#eab308', type: 'square',   attack: 0.012,hold: 0.03, release: 0.45, level: 0.08, detune: 7,  filterStart: 2000, filterEnd: 550,  q: 1.0 }, // amarillo
+    { color: '#db2777', type: 'triangle', attack: 0.025,hold: 0.06, release: 0.85, level: 0.14, detune: 6,  filterStart: 3200, filterEnd: 750,  q: 0.6 }, // rosa
+  ];
+  let styleIndex = 0;
+  function nextStyle(){
+    const s = STYLES[styleIndex % STYLES.length];
+    styleIndex++;
+    return s;
+  }
+
+  /* ============================================================
+     4) ESTADO DE DIBUJO (trazos libres)
+     ============================================================ */
+  const strokes = []; // { points:[{x,y}], style, voices:[] }
+  let currentStroke = null;
+  let isDrawing = false;
+
+  const MIN_POINT_DIST = 2.5; // px mínimos entre puntos para no saturar
+
+  function addPoint(stroke, x, y){
+    const pts = stroke.points;
+    const last = pts[pts.length - 1];
+    if (last){
+      const dx = x - last.x, dy = y - last.y;
+      if ((dx*dx + dy*dy) < MIN_POINT_DIST*MIN_POINT_DIST) return;
+    }
+    pts.push({ x, y });
+  }
+
+  function startStroke(x, y){
+    ensureAudio();
+    currentStroke = {
+      points: [{ x, y }],
+      style: nextStyle(),
+      voices: [],
+    };
+    strokes.push(currentStroke);
+    isDrawing = true;
+    hint.classList.add('hidden');
+  }
+
+  function endStroke(){
+    isDrawing = false;
+    currentStroke = null;
+  }
+
+  // Borra de forma PARCIAL: solo quita los puntos del trazo que caen
+  // cerca de (x,y), y si eso parte el trazo en dos, cada mitad queda
+  // como un trazo independiente (mismo color/timbre). No borra la línea
+  // entera, solo el pedacito tocado por la goma.
+  const ERASER_RADIUS = 20; // px
+
+  function eraseAt(x, y){
+    const r2 = ERASER_RADIUS * ERASER_RADIUS;
+    for (let i = strokes.length - 1; i >= 0; i--){
+      const stroke = strokes[i];
+      const pts = stroke.points;
+
+      let touched = false;
+      const pieces = [];
+      let current = [];
+      for (const p of pts){
+        const dx = p.x - x, dy = p.y - y;
+        if (dx * dx + dy * dy <= r2){
+          touched = true;
+          if (current.length > 1) pieces.push(current);
+          current = [];
+        } else {
+          current.push(p);
+        }
+      }
+      if (current.length > 1) pieces.push(current);
+      if (!touched) continue;
+
+      strokes.splice(i, 1);
+      if (stroke === currentStroke){ currentStroke = null; isDrawing = false; }
+
+      if (pieces.length === 0){
+        for (const v of stroke.voices) voiceExit(v);
+        continue;
+      }
+      // El primer pedazo se queda con las voces activas del trazo original
+      // para no cortar el sonido de golpe si la goma no tocó esa zona;
+      // los pedazos nuevos arrancan sin voces (sonarán si el playhead
+      // vuelve a cruzarlos).
+      pieces.forEach((points, idx) => {
+        strokes.splice(i, 0, {
+          points,
+          style: stroke.style,
+          voices: idx === 0 ? stroke.voices : [],
+        });
+      });
+    }
+  }
+
+  /* ============================================================
+     5) PLAYHEAD: posición, loop y lectura continua de los trazos
+     ============================================================ */
+  let playheadX = 0;
+  let playheadSpeed = 90; // px por segundo (ajustable con el slider "Velocidad")
+
+  function updatePlayhead(dt){
+    playheadX += playheadSpeed * dt;
+    if (playheadX >= W) playheadX -= W; // loop
+  }
+
+  const CROSSING_CLUSTER_DIST = 10; // px: cruces muy próximos en Y cuentan como uno solo
+
+  // Busca TODOS los puntos donde el trazo cruza la X actual del playhead
+  // (un mismo trazo puede cruzarla varias veces a la vez: zigzag, espiral,
+  // letras, etc.) y devuelve sus Y interpoladas, de arriba a abajo.
+  // Cruces muy cercanos entre sí se agrupan para no spamear voces por
+  // el jitter normal de dibujar a mano.
+  function sampleStrokeCrossings(stroke){
+    const pts = stroke.points;
+    const raw = [];
+    for (let i = 0; i < pts.length - 1; i++){
+      const p1 = pts[i], p2 = pts[i + 1];
+      const xa = Math.min(p1.x, p2.x), xb = Math.max(p1.x, p2.x);
+      if (playheadX < xa || playheadX > xb) continue;
+      const t = (p2.x === p1.x) ? 0 : (playheadX - p1.x) / (p2.x - p1.x);
+      raw.push(p1.y + (p2.y - p1.y) * t);
+    }
+    if (raw.length <= 1) return raw;
+    raw.sort((a, b) => a - b);
+    const merged = [raw[0]];
+    for (let i = 1; i < raw.length; i++){
+      if (raw[i] - merged[merged.length - 1] > CROSSING_CLUSTER_DIST) merged.push(raw[i]);
+    }
+    return merged;
+  }
+
+  // Cada frame, para cada trazo: detecta todos sus cruces actuales con
+  // el playhead y empareja cada uno con la voz activa más cercana (por Y)
+  // para mantener el glide continuo de ese cruce en particular. Los
+  // cruces sin voz previa encienden una voz nueva; las voces que ya no
+  // tienen cruce que las sostenga se apagan. Así ningún cruce simultáneo
+  // queda "tapado" por otro: cada uno suena de forma independiente.
+  function updateVoices(){
+    if (!audioCtx) return;
+    for (const stroke of strokes){
+      const crossings = sampleStrokeCrossings(stroke);
+      const usedCrossing = new Array(crossings.length).fill(false);
+
+      for (const v of stroke.voices){
+        if (!v.active) continue;
+        let bestIdx = -1, bestDist = Infinity;
+        for (let i = 0; i < crossings.length; i++){
+          if (usedCrossing[i]) continue;
+          const d = Math.abs(crossings[i] - v.lastY);
+          if (d < bestDist){ bestDist = d; bestIdx = i; }
+        }
+        if (bestIdx === -1){
+          voiceExit(v);
+        } else {
+          usedCrossing[bestIdx] = true;
+          voiceGlide(v, crossings[bestIdx]);
+        }
+      }
+
+      for (let i = 0; i < crossings.length; i++){
+        if (usedCrossing[i]) continue;
+        const v = createVoice(stroke.style, crossings[i]);
+        voiceEnter(v, crossings[i]);
+        stroke.voices.push(v);
+      }
+
+      if (stroke.voices.some(v => v.removed)){
+        stroke.voices = stroke.voices.filter(v => !v.removed);
+      }
+    }
+  }
+
+  /* ============================================================
+     6) LOOP DE RENDER
+     ============================================================ */
+  function drawPlayhead(){
+    ctx.save();
+    ctx.strokeStyle = 'rgba(30,30,30,0.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(playheadX, 0);
+    ctx.lineTo(playheadX, H);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawStrokes(){
+    for (const stroke of strokes){
+      const pts = stroke.points;
+      if (pts.length < 2) continue;
+
+      ctx.save();
+      ctx.strokeStyle = stroke.style.color;
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Dibuja un punto negro donde el playhead está "leyendo" cada trazo
+  // activo en este instante (en vez de marcas que aparecen y se apagan
+  // solas, sigue en vivo la posición mientras la voz suena).
+  function drawActiveDots(){
+    ctx.save();
+    ctx.fillStyle = '#141414';
+    for (const stroke of strokes){
+      for (const v of stroke.voices){
+        if (!v.active) continue;
+        ctx.beginPath();
+        ctx.arc(playheadX, v.lastY, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  let lastTime = performance.now();
+  function frame(now){
+    const dt = Math.min(0.05, (now - lastTime) / 1000); // clamp por si hay tab en pausa
+    lastTime = now;
+
+    ctx.clearRect(0, 0, W, H);
+
+    updatePlayhead(dt);
+    updateVoices();
+    drawStrokes();
+    drawActiveDots();
+    drawPlayhead();
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  /* ============================================================
+     7) INPUT: mouse + touch (Pointer Events unifica ambos)
+     ============================================================ */
+  function getPos(e){
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  let mode = 'draw'; // 'draw' | 'erase'
+  let isErasing = false;
+
+  // El botón derecho del mouse actúa como goma al instante, sin tener que
+  // cambiar de herramienta: mientras se mantiene apretado borra, y al
+  // soltarlo se vuelve a la herramienta que estaba activa antes.
+  let rightClickErasing = false;
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  canvas.addEventListener('pointerdown', (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    const { x, y } = getPos(e);
+
+    if (e.button === 2){
+      rightClickErasing = true;
+      canvas.classList.add('erasing');
+      eraseAt(x, y);
+      return;
+    }
+
+    if (mode === 'erase'){
+      isErasing = true;
+      eraseAt(x, y);
+    } else {
+      startStroke(x, y);
+    }
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    const { x, y } = getPos(e);
+
+    if (rightClickErasing){
+      eraseAt(x, y);
+      return;
+    }
+
+    if (mode === 'erase'){
+      if (isErasing) eraseAt(x, y);
+    } else if (isDrawing && currentStroke){
+      addPoint(currentStroke, x, y);
+    }
+  });
+
+  function stopInteraction(){
+    isErasing = false;
+    if (rightClickErasing){
+      rightClickErasing = false;
+      canvas.classList.toggle('erasing', mode === 'erase');
+    }
+    if (isDrawing) endStroke();
+  }
+  canvas.addEventListener('pointerup', stopInteraction);
+  canvas.addEventListener('pointercancel', stopInteraction);
+  canvas.addEventListener('pointerleave', stopInteraction);
+
+  /* ============================================================
+     8) UI: herramientas (lápiz/goma), limpiar, volumen, espacio/eco,
+        velocidad
+     ============================================================ */
+  const hint = document.getElementById('hint');
+  const pencilBtn = document.getElementById('pencilBtn');
+  const eraserBtn = document.getElementById('eraserBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const muteBtn = document.getElementById('muteBtn');
+  const iconSound = document.getElementById('iconSound');
+  const iconMute = document.getElementById('iconMute');
+  const volumePopover = document.getElementById('volumePopover');
+  const volumeRange = document.getElementById('volumeRange');
+  const reverbRange = document.getElementById('reverbRange');
+  const delayRange = document.getElementById('delayRange');
+  const speedRange = document.getElementById('speedRange');
+
+  function setMode(newMode){
+    mode = newMode;
+    pencilBtn.classList.toggle('active', mode === 'draw');
+    eraserBtn.classList.toggle('active', mode === 'erase');
+    canvas.classList.toggle('erasing', mode === 'erase');
+  }
+  pencilBtn.addEventListener('click', () => setMode('draw'));
+  eraserBtn.addEventListener('click', () => setMode('erase'));
+
+  clearBtn.addEventListener('click', () => {
+    for (const stroke of strokes) for (const v of stroke.voices) voiceExit(v);
+    strokes.length = 0;
+    currentStroke = null;
+    isDrawing = false;
+  });
+
+  // El ícono de sonido abre/cierra un pequeño popover con el slider de
+  // volumen, en vez de ocupar un control fijo en la toolbar.
+  function updateSoundIcon(){
+    const muted = masterVolume <= 0;
+    iconSound.style.display = muted ? 'none' : '';
+    iconMute.style.display = muted ? '' : 'none';
+  }
+
+  muteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    volumePopover.hidden = !volumePopover.hidden;
+  });
+  document.addEventListener('click', (e) => {
+    if (!volumePopover.hidden && !e.target.closest('.tool-group')) volumePopover.hidden = true;
+  });
+
+  volumeRange.addEventListener('input', () => {
+    masterVolume = Number(volumeRange.value) / 100;
+    if (masterGain) masterGain.gain.value = masterVolume;
+    updateSoundIcon();
+  });
+
+  reverbRange.addEventListener('input', () => {
+    reverbAmount = Number(reverbRange.value) / 100;
+    if (reverbSend) reverbSend.gain.value = reverbAmount * REVERB_SEND_MAX;
+  });
+
+  delayRange.addEventListener('input', () => {
+    delayAmount = Number(delayRange.value) / 100;
+    if (delaySend) delaySend.gain.value = delayAmount * DELAY_SEND_MAX;
+  });
+
+  speedRange.addEventListener('input', () => {
+    playheadSpeed = Number(speedRange.value);
+  });
+  playheadSpeed = Number(speedRange.value);
+
+})();
+</script>
+
+<script>
+  // Registra el service worker para que la app quede instalable y
+  // funcione offline una vez abierta la primera vez.
+  if ('serviceWorker' in navigator){
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+</script>
+</body>
+</html>
