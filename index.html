@@ -144,13 +144,18 @@
     width: 80px; accent-color: #7c3aed; cursor: pointer;
   }
 
-  /* Selector de color/timbre: por defecto los trazos rotan de color
-     solos (arcoíris); cada toque en el botón avanza al siguiente color
-     fijo, y vuelve a automático al dar la vuelta completa. */
-  .color-dot{
-    width: 20px; height: 20px; border-radius: 50%;
-    border: 1px solid rgba(0,0,0,0.15);
+  /* Selector de color/timbre: todas las opciones a la vista, una al
+     lado de la otra (nada de popover ni ciclar) — tocás directo la que
+     querés. La primera es "automático" (arcoíris, rota solo). */
+  .color-row{
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 6px; border-left: 1px solid var(--ui-border);
   }
+  .swatch{
+    width: 26px; height: 26px; border-radius: 50%; flex: none;
+    border: 2px solid transparent; padding: 0; cursor: pointer;
+  }
+  .swatch.selected{ border-color: #141414; }
 </style>
 </head>
 <body>
@@ -199,9 +204,7 @@
     </svg>
   </button>
 
-  <button class="btn" id="colorBtn" title="Automático: cada trazo rota de color — tocá para fijar uno" aria-label="Color y timbre">
-    <span class="color-dot" id="colorDot"></span>
-  </button>
+  <div class="color-row" id="colorRow"></div>
 
   <button class="btn" id="eraserBtn" title="Goma: borra la parte del trazo que toques" aria-label="Herramienta goma">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -949,8 +952,7 @@
   const toolbarEl = document.getElementById('toolbar');
   const pencilBtn = document.getElementById('pencilBtn');
   const pixelBtn = document.getElementById('pixelBtn');
-  const colorBtn = document.getElementById('colorBtn');
-  const colorDot = document.getElementById('colorDot');
+  const colorRow = document.getElementById('colorRow');
   const eraserBtn = document.getElementById('eraserBtn');
   const clearBtn = document.getElementById('clearBtn');
   const muteBtn = document.getElementById('muteBtn');
@@ -1015,29 +1017,36 @@
     updateSoundIcon();
   });
 
-  // Selector de color/timbre simplificado: un solo botón, sin popover.
-  // Cada toque avanza al siguiente estado — automático (arcoíris,
-  // rota solo) y después cada color fijo — y da la vuelta al llegar
-  // al final. Así queda "a mano" con un solo toque, y por defecto
-  // arranca en automático.
+  // Selector de color/timbre: todas las opciones siempre a la vista en
+  // la toolbar (nada de popover ni ciclar) — un toque elige directo. La
+  // primera opción es "automático" (arcoíris: rota de color solo), que
+  // es la que está activa por defecto.
   const AUTO_GRADIENT = 'conic-gradient(from 0deg,#7c3aed,#f97316,#16a34a,#dc2626,#2563eb,#eab308,#db2777,#7c3aed)';
-  const colorStates = [null, ...STYLES]; // null = automático
-  let colorStateIndex = 0;
 
-  function applyColorState(){
-    const style = colorStates[colorStateIndex];
+  function selectDrawStyle(style, btnEl){
     styleOverride = style;
-    colorDot.style.background = style ? style.color : AUTO_GRADIENT;
-    colorBtn.title = style
-      ? `Color fijo (${style.type}) — tocá para el siguiente`
-      : 'Automático: cada trazo rota de color — tocá para fijar uno';
+    colorRow.querySelectorAll('.swatch').forEach((el) => el.classList.toggle('selected', el === btnEl));
   }
-  applyColorState();
 
-  colorBtn.addEventListener('click', () => {
-    colorStateIndex = (colorStateIndex + 1) % colorStates.length;
-    applyColorState();
-  });
+  (function buildColorSwatches(){
+    const autoBtn = document.createElement('button');
+    autoBtn.type = 'button';
+    autoBtn.className = 'swatch selected';
+    autoBtn.style.background = AUTO_GRADIENT;
+    autoBtn.title = 'Automático: cada trazo rota de color y timbre';
+    autoBtn.addEventListener('click', () => selectDrawStyle(null, autoBtn));
+    colorRow.appendChild(autoBtn);
+
+    STYLES.forEach((style) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'swatch';
+      btn.style.background = style.color;
+      btn.title = `Dibujar siempre con este color/timbre (${style.type})`;
+      btn.addEventListener('click', () => selectDrawStyle(style, btn));
+      colorRow.appendChild(btn);
+    });
+  })();
 
   volumeRange.addEventListener('input', () => {
     masterVolume = Number(volumeRange.value) / 100;
