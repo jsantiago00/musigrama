@@ -1011,16 +1011,21 @@
   // a propósito), y este callback llega de forma asíncrona después de
   // ese tap original — por eso mostramos un botón "Compartir" y recién
   // ahí, dentro de ESE click, se dispara el share.
-  function finishRecording(mimeType){
+  function finishRecording(rawMimeType){
     // Deja de sumar la salida de audio a la grabación y libera la cámara
     // virtual del canvas; la reproducción normal sigue sin cambios.
     compressorNode.disconnect(recordDestNode);
     recordVideoStream.getTracks().forEach((t) => t.stop());
 
-    const blob = new Blob(recordedChunks, { type: mimeType });
+    // Usamos el tipo MIME "limpio" (sin ";codecs=...") para el Blob/File:
+    // Android valida el tipo de archivo al compartir, y la parte de
+    // códecs suele hacer que rechace el archivo con "Permission denied"
+    // aunque el contenido sea perfectamente válido.
+    const cleanType = rawMimeType.split(';')[0].trim();
+    const blob = new Blob(recordedChunks, { type: cleanType });
     recordedChunks = [];
-    const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-    pendingRecordingFile = new File([blob], `musigrama.${ext}`, { type: mimeType });
+    const ext = cleanType.includes('mp4') ? 'mp4' : 'webm';
+    pendingRecordingFile = new File([blob], `musigrama.${ext}`, { type: cleanType });
 
     // Chequeamos de verdad si este archivo se puede compartir (no solo si
     // existe navigator.share): así avisamos de entrada si no se va a poder
