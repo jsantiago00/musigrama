@@ -16,7 +16,6 @@
 <meta name="apple-mobile-web-app-title" content="Musigrama">
 <style>
   :root{
-    --grid-line: #dbe1ea;
     --paper: #fdfcf7;
     --ink: #2c2c2c;
     --ui-bg: rgba(255,255,255,0.85);
@@ -26,12 +25,7 @@
   html, body{
     margin:0; padding:0; width:100%; height:100%;
     overscroll-behavior: none;
-    background-color: var(--paper);
-    /* Fondo tipo cuaderno cuadriculado, dibujado con CSS (no ocupa el canvas) */
-    background-image:
-      linear-gradient(var(--grid-line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
-    background-size: 28px 28px;
+    background-color: var(--paper); /* respaldo antes del primer frame; la grilla se dibuja en el canvas */
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     color: var(--ink);
   }
@@ -655,6 +649,32 @@
   /* ============================================================
      6) LOOP DE RENDER
      ============================================================ */
+  const PAPER_COLOR = '#fdfcf7';
+  const GRID_COLOR = '#dbe1ea';
+  const GRID_SIZE = 28;
+
+  // Fondo tipo cuaderno cuadriculado, dibujado directo en el canvas (no
+  // como CSS del body) para que quede incluido al grabar la sesión.
+  function drawBackground(){
+    ctx.fillStyle = PAPER_COLOR;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.strokeStyle = GRID_COLOR;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x <= W; x += GRID_SIZE){
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, H);
+    }
+    for (let y = 0; y <= H; y += GRID_SIZE){
+      ctx.moveTo(0, y + 0.5);
+      ctx.lineTo(W, y + 0.5);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawPlayhead(){
     ctx.save();
     ctx.strokeStyle = 'rgba(30,30,30,0.55)';
@@ -706,7 +726,7 @@
     const dt = Math.min(0.05, (now - lastTime) / 1000); // clamp por si hay tab en pausa
     lastTime = now;
 
-    ctx.clearRect(0, 0, W, H);
+    drawBackground();
 
     updatePlayhead(dt);
     updateVoices();
