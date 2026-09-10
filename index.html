@@ -151,6 +151,20 @@
   }
   .popover[hidden]{ display: none; }
   .popover input[type=range]{ width: 120px; accent-color: #7c3aed; cursor: pointer; }
+
+  /* Selector de color/timbre: por defecto los trazos rotan de color
+     solos, pero se puede fijar uno (p.ej. para que toda una obra suene
+     con un solo synth). */
+  .color-dot{
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+  .popover.swatches{ gap: 7px; }
+  .swatch{
+    width: 26px; height: 26px; border-radius: 50%; flex: none;
+    border: 2px solid transparent; padding: 0; cursor: pointer;
+  }
+  .swatch.selected{ border-color: #141414; }
 </style>
 </head>
 <body>
@@ -189,6 +203,13 @@
       <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
     </svg>
   </button>
+
+  <div class="tool-group">
+    <button class="btn" id="colorBtn" title="Elegir color y timbre" aria-label="Elegir color y timbre">
+      <span class="color-dot" id="colorDot"></span>
+    </button>
+    <div class="popover swatches" id="colorPopover" hidden></div>
+  </div>
 
   <button class="btn" id="eraserBtn" title="Goma: borra la parte del trazo que toques" aria-label="Herramienta goma">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -455,6 +476,13 @@
     return s;
   }
 
+  // Si el usuario fija un color/timbre desde el selector, todos los
+  // trazos nuevos lo usan; si no, se sigue rotando automáticamente.
+  let styleOverride = null;
+  function currentDrawStyle(){
+    return styleOverride || nextStyle();
+  }
+
   /* ============================================================
      4) ESTADO DE DIBUJO (trazos libres) y DESHACER
      ============================================================ */
@@ -506,7 +534,7 @@
     ensureAudio();
     currentStroke = {
       points: [{ x, y }],
-      style: nextStyle(),
+      style: currentDrawStyle(),
       voices: [],
     };
     strokes.push(currentStroke);
@@ -653,86 +681,104 @@
   const GRID_COLOR = '#dbe1ea';
   const GRID_SIZE = 28;
 
+  // Todas las funciones de dibujo reciben el contexto 2D a usar: así el
+  // mismo frame se puede pintar tanto en el canvas visible como (durante
+  // una grabación) en un segundo canvas más chico, sin duplicar lógica.
+
   // Fondo tipo cuaderno cuadriculado, dibujado directo en el canvas (no
   // como CSS del body) para que quede incluido al grabar la sesión.
-  function drawBackground(){
-    ctx.fillStyle = PAPER_COLOR;
-    ctx.fillRect(0, 0, W, H);
+  function drawBackground(c){
+    c.fillStyle = PAPER_COLOR;
+    c.fillRect(0, 0, W, H);
 
-    ctx.save();
-    ctx.strokeStyle = GRID_COLOR;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
+    c.save();
+    c.strokeStyle = GRID_COLOR;
+    c.lineWidth = 1;
+    c.beginPath();
     for (let x = 0; x <= W; x += GRID_SIZE){
-      ctx.moveTo(x + 0.5, 0);
-      ctx.lineTo(x + 0.5, H);
+      c.moveTo(x + 0.5, 0);
+      c.lineTo(x + 0.5, H);
     }
     for (let y = 0; y <= H; y += GRID_SIZE){
-      ctx.moveTo(0, y + 0.5);
-      ctx.lineTo(W, y + 0.5);
+      c.moveTo(0, y + 0.5);
+      c.lineTo(W, y + 0.5);
     }
-    ctx.stroke();
-    ctx.restore();
+    c.stroke();
+    c.restore();
   }
 
-  function drawPlayhead(){
-    ctx.save();
-    ctx.strokeStyle = 'rgba(30,30,30,0.55)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(playheadX, 0);
-    ctx.lineTo(playheadX, H);
-    ctx.stroke();
-    ctx.restore();
+  function drawPlayhead(c){
+    c.save();
+    c.strokeStyle = 'rgba(30,30,30,0.55)';
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(playheadX, 0);
+    c.lineTo(playheadX, H);
+    c.stroke();
+    c.restore();
   }
 
-  function drawStrokes(){
+  function drawStrokes(c){
     for (const stroke of strokes){
       const pts = stroke.points;
       if (pts.length < 2) continue;
 
-      ctx.save();
-      ctx.strokeStyle = stroke.style.color;
-      ctx.lineWidth = 3;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.stroke();
-      ctx.restore();
+      c.save();
+      c.strokeStyle = stroke.style.color;
+      c.lineWidth = 3;
+      c.lineCap = 'round';
+      c.lineJoin = 'round';
+      c.beginPath();
+      c.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) c.lineTo(pts[i].x, pts[i].y);
+      c.stroke();
+      c.restore();
     }
   }
 
   // Dibuja un punto negro donde el playhead está "leyendo" cada trazo
   // activo en este instante (en vez de marcas que aparecen y se apagan
   // solas, sigue en vivo la posición mientras la voz suena).
-  function drawActiveDots(){
-    ctx.save();
-    ctx.fillStyle = '#141414';
+  function drawActiveDots(c){
+    c.save();
+    c.fillStyle = '#141414';
     for (const stroke of strokes){
       for (const v of stroke.voices){
         if (!v.active) continue;
-        ctx.beginPath();
-        ctx.arc(playheadX, v.lastY, 5, 0, Math.PI * 2);
-        ctx.fill();
+        c.beginPath();
+        c.arc(playheadX, v.lastY, 5, 0, Math.PI * 2);
+        c.fill();
       }
     }
-    ctx.restore();
+    c.restore();
   }
+
+  // Mientras se está grabando, se setea a un segundo canvas (más chico,
+  // sin escala retina) al que también se dibuja cada frame — ver
+  // sección 9. Así la grabación no tiene que codificar la resolución
+  // física completa del celular, que es mucho más pesada de lo que hace
+  // falta para compartir un video y puede trabar/saltear frames.
+  let recordCtx = null;
 
   let lastTime = performance.now();
   function frame(now){
     const dt = Math.min(0.05, (now - lastTime) / 1000); // clamp por si hay tab en pausa
     lastTime = now;
 
-    drawBackground();
-
     updatePlayhead(dt);
     updateVoices();
-    drawStrokes();
-    drawActiveDots();
-    drawPlayhead();
+
+    drawBackground(ctx);
+    drawStrokes(ctx);
+    drawActiveDots(ctx);
+    drawPlayhead(ctx);
+
+    if (recordCtx){
+      drawBackground(recordCtx);
+      drawStrokes(recordCtx);
+      drawActiveDots(recordCtx);
+      drawPlayhead(recordCtx);
+    }
 
     requestAnimationFrame(frame);
   }
@@ -840,6 +886,9 @@
   const fabBtn = document.getElementById('fabBtn');
   const toolbarEl = document.getElementById('toolbar');
   const pencilBtn = document.getElementById('pencilBtn');
+  const colorBtn = document.getElementById('colorBtn');
+  const colorDot = document.getElementById('colorDot');
+  const colorPopover = document.getElementById('colorPopover');
   const eraserBtn = document.getElementById('eraserBtn');
   const clearBtn = document.getElementById('clearBtn');
   const muteBtn = document.getElementById('muteBtn');
@@ -892,8 +941,49 @@
     e.stopPropagation();
     volumePopover.hidden = !volumePopover.hidden;
   });
+  const volumeGroup = muteBtn.closest('.tool-group');
   document.addEventListener('click', (e) => {
-    if (!volumePopover.hidden && !e.target.closest('.tool-group')) volumePopover.hidden = true;
+    if (!volumePopover.hidden && !volumeGroup.contains(e.target)) volumePopover.hidden = true;
+  });
+
+  // Selector de color/timbre: un swatch por color de STYLES, más uno
+  // "automático" (degradé) que vuelve a la rotación normal.
+  const AUTO_GRADIENT = 'conic-gradient(from 0deg,#7c3aed,#f97316,#16a34a,#dc2626,#2563eb,#eab308,#db2777,#7c3aed)';
+
+  function selectDrawStyle(style, btnEl){
+    styleOverride = style;
+    colorPopover.querySelectorAll('.swatch').forEach((el) => el.classList.toggle('selected', el === btnEl));
+    colorDot.style.background = style ? style.color : AUTO_GRADIENT;
+  }
+
+  (function buildColorSwatches(){
+    const autoBtn = document.createElement('button');
+    autoBtn.type = 'button';
+    autoBtn.className = 'swatch selected';
+    autoBtn.style.background = AUTO_GRADIENT;
+    autoBtn.title = 'Automático: cada trazo rota de color y timbre';
+    autoBtn.addEventListener('click', () => selectDrawStyle(null, autoBtn));
+    colorPopover.appendChild(autoBtn);
+
+    STYLES.forEach((style) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'swatch';
+      btn.style.background = style.color;
+      btn.title = `Dibujar siempre con este color/timbre (${style.type})`;
+      btn.addEventListener('click', () => selectDrawStyle(style, btn));
+      colorPopover.appendChild(btn);
+    });
+  })();
+  colorDot.style.background = AUTO_GRADIENT;
+
+  colorBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    colorPopover.hidden = !colorPopover.hidden;
+  });
+  const colorGroup = colorBtn.closest('.tool-group');
+  document.addEventListener('click', (e) => {
+    if (!colorPopover.hidden && !colorGroup.contains(e.target)) colorPopover.hidden = true;
   });
 
   volumeRange.addEventListener('input', () => {
@@ -933,6 +1023,7 @@
   const RECORD_MAX_MS = 3 * 60 * 1000; // tope de 3 min para no comerse la memoria del celular
   let mediaRecorder = null;
   let recordedChunks = [];
+  let recordCanvas = null;
   let recordDestNode = null;
   let recordVideoStream = null;
   let recordStartedAt = 0;
@@ -969,7 +1060,17 @@
     ensureAudio();
 
     const mimeType = pickRecordMimeType();
-    recordVideoStream = canvas.captureStream(30);
+
+    // Grabamos desde un canvas aparte, a resolución "CSS" (sin el
+    // multiplicador de pantalla retina): el mismo dibujo, con muchos
+    // menos píxeles por frame, para que el codificador en tiempo real
+    // no se atore y la grabación salga fluida en vez de entrecortada.
+    recordCanvas = document.createElement('canvas');
+    recordCanvas.width = W;
+    recordCanvas.height = H;
+    recordCtx = recordCanvas.getContext('2d');
+
+    recordVideoStream = recordCanvas.captureStream(30);
     recordDestNode = audioCtx.createMediaStreamDestination();
     compressorNode.connect(recordDestNode); // se suma a la salida normal, no la reemplaza
 
@@ -1004,6 +1105,7 @@
     clearTimeout(recordAutoStopHandle);
     recordBtn.classList.remove('recording');
     recIndicator.hidden = true;
+    recordCtx = null; // deja de pintar el segundo canvas
   }
 
   // Al terminar de procesar, NO se llama a navigator.share() acá: para
