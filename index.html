@@ -209,6 +209,15 @@
     </svg>
   </button>
 
+  <button class="btn" id="pixelBtn" title="Pixel art: pintar celdas de la grilla" aria-label="Herramienta pixel art">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="7" height="7" rx="1" fill="currentColor" stroke="none"></rect>
+      <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+      <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+      <rect x="14" y="14" width="7" height="7" rx="1" fill="currentColor" stroke="none"></rect>
+    </svg>
+  </button>
+
   <div class="tool-group">
     <button class="btn" id="colorBtn" title="Elegir color y timbre" aria-label="Elegir color y timbre">
       <span class="color-dot" id="colorDot"></span>
@@ -284,6 +293,7 @@
   const ctx = canvas.getContext('2d');
 
   let W = 0, H = 0; // dimensiones lógicas (CSS px), no físicas
+  const GRID_SIZE = 28; // tamaño de casillero del cuaderno; también la grilla del modo pixel art
 
   function resizeCanvas(){
     const dpr = window.devicePixelRatio || 1;
@@ -505,7 +515,7 @@
   const UNDO_LIMIT = 30;
 
   function snapshotStrokes(){
-    return strokes.map(s => ({ points: s.points.slice(), style: s.style }));
+    return strokes.map(s => ({ points: s.points.slice(), style: s.style, pixelCell: s.pixelCell || null }));
   }
 
   function pushUndoSnapshot(){
@@ -518,7 +528,12 @@
     const snapshot = undoStack.pop();
     for (const stroke of strokes) for (const v of stroke.voices) voiceExit(v);
     strokes.length = 0;
-    for (const s of snapshot) strokes.push({ points: s.points.slice(), style: s.style, voices: [] });
+    paintedCells.clear();
+    for (const s of snapshot){
+      const restored = { points: s.points.slice(), style: s.style, voices: [], pixelCell: s.pixelCell };
+      strokes.push(restored);
+      if (restored.pixelCell) paintedCells.set(cellKey(restored.pixelCell.col, restored.pixelCell.row), restored);
+    }
     currentStroke = null;
     isDrawing = false;
     return true;
@@ -586,6 +601,7 @@
 
       if (pieces.length === 0){
         for (const v of stroke.voices) voiceExit(v);
+        if (stroke.pixelCell) paintedCells.delete(cellKey(stroke.pixelCell.col, stroke.pixelCell.row));
         continue;
       }
       // El primer pedazo se queda con las voces activas del trazo original
@@ -600,6 +616,40 @@
         });
       });
     }
+  }
+
+  // Modo Pixel art: en vez de un trazo libre, cada celda pintada de la
+  // grilla se guarda como un "trazo" de un solo segmento horizontal que
+  // ocupa todo el ancho de la celda. Así se reutiliza tal cual el mismo
+  // motor de audio/lectura continua que los trazos a mano alzada: el
+  // playhead la lee igual, sonando brevemente mientras la atraviesa.
+  const paintedCells = new Map(); // "col,row" -> trazo de esa celda
+
+  function cellKey(col, row){ return col + ',' + row; }
+
+  function paintCell(col, row){
+    const key = cellKey(col, row);
+    if (paintedCells.has(key)) return;
+    const x0 = col * GRID_SIZE, x1 = x0 + GRID_SIZE;
+    const yMid = row * GRID_SIZE + GRID_SIZE / 2;
+    const stroke = {
+      points: [{ x: x0 + 1, y: yMid }, { x: x1 - 1, y: yMid }],
+      style: currentDrawStyle(),
+      voices: [],
+      pixelCell: { col, row },
+    };
+    strokes.push(stroke);
+    paintedCells.set(key, stroke);
+  }
+
+  function removeCell(col, row){
+    const key = cellKey(col, row);
+    const stroke = paintedCells.get(key);
+    if (!stroke) return;
+    for (const v of stroke.voices) voiceExit(v);
+    const idx = strokes.indexOf(stroke);
+    if (idx !== -1) strokes.splice(idx, 1);
+    paintedCells.delete(key);
   }
 
   /* ============================================================
@@ -685,7 +735,6 @@
      ============================================================ */
   const PAPER_COLOR = '#fdfcf7';
   const GRID_COLOR = '#dbe1ea';
-  const GRID_SIZE = 28;
 
   // Todas las funciones de dibujo reciben el contexto 2D a usar: así el
   // mismo frame se puede pintar tanto en el canvas visible como (durante
@@ -726,6 +775,13 @@
 
   function drawStrokes(c){
     for (const stroke of strokes){
+      if (stroke.pixelCell){
+        const { col, row } = stroke.pixelCell;
+        c.fillStyle = stroke.style.color;
+        c.fillRect(col * GRID_SIZE + 1, row * GRID_SIZE + 1, GRID_SIZE - 2, GRID_SIZE - 2);
+        continue;
+      }
+
       const pts = stroke.points;
       if (pts.length < 2) continue;
 
@@ -798,8 +854,10 @@
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
-  let mode = 'draw'; // 'draw' | 'erase'
+  let mode = 'draw'; // 'draw' | 'pixel' | 'erase'
   let isErasing = false;
+  let isPixelPainting = false;
+  let lastPixelCell = null; // evita repintar la misma celda mientras se arrastra
   let toolbarOpen = false; // la toolbar arranca colapsada; se abre con el ícono flotante
 
   // El botón derecho del mouse actúa como goma al instante, sin tener que
@@ -831,6 +889,17 @@
       pushUndoSnapshot();
       isErasing = true;
       eraseAt(x, y);
+    } else if (mode === 'pixel'){
+      pushUndoSnapshot();
+      ensureAudio();
+      isPixelPainting = true;
+      const col = Math.floor(x / GRID_SIZE), row = Math.floor(y / GRID_SIZE);
+      lastPixelCell = cellKey(col, row);
+      // Tocar una celda vacía la pinta; tocar una ya pintada la borra
+      // (toggle), para corregir rápido sin cambiar de herramienta.
+      if (paintedCells.has(lastPixelCell)) removeCell(col, row);
+      else paintCell(col, row);
+      hint.classList.add('hidden');
     } else {
       pushUndoSnapshot();
       startStroke(x, y);
@@ -847,6 +916,14 @@
 
     if (mode === 'erase'){
       if (isErasing) eraseAt(x, y);
+    } else if (mode === 'pixel'){
+      if (!isPixelPainting || x < 0 || y < 0 || x >= W || y >= H) return;
+      const col = Math.floor(x / GRID_SIZE), row = Math.floor(y / GRID_SIZE);
+      const key = cellKey(col, row);
+      if (key !== lastPixelCell){
+        lastPixelCell = key;
+        paintCell(col, row); // arrastrar solo pinta, no togglea (para no borrar sin querer)
+      }
     } else if (isDrawing && currentStroke){
       addPoint(currentStroke, x, y);
     }
@@ -854,6 +931,7 @@
 
   function stopInteraction(){
     isErasing = false;
+    isPixelPainting = false;
     if (rightClickErasing){
       rightClickErasing = false;
       canvas.classList.toggle('erasing', mode === 'erase');
@@ -892,6 +970,7 @@
   const fabBtn = document.getElementById('fabBtn');
   const toolbarEl = document.getElementById('toolbar');
   const pencilBtn = document.getElementById('pencilBtn');
+  const pixelBtn = document.getElementById('pixelBtn');
   const colorBtn = document.getElementById('colorBtn');
   const colorDot = document.getElementById('colorDot');
   const colorPopover = document.getElementById('colorPopover');
@@ -920,16 +999,19 @@
   function setMode(newMode){
     mode = newMode;
     pencilBtn.classList.toggle('active', mode === 'draw');
+    pixelBtn.classList.toggle('active', mode === 'pixel');
     eraserBtn.classList.toggle('active', mode === 'erase');
     canvas.classList.toggle('erasing', mode === 'erase');
   }
   pencilBtn.addEventListener('click', () => setMode('draw'));
+  pixelBtn.addEventListener('click', () => setMode('pixel'));
   eraserBtn.addEventListener('click', () => setMode('erase'));
 
   clearBtn.addEventListener('click', () => {
     pushUndoSnapshot();
     for (const stroke of strokes) for (const v of stroke.voices) voiceExit(v);
     strokes.length = 0;
+    paintedCells.clear();
     currentStroke = null;
     isDrawing = false;
   });
