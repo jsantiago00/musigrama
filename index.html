@@ -89,6 +89,12 @@
   .btn.active{ background: rgba(220,38,38,0.14); color: #b91c1c; }
   .btn svg{ width: 20px; height: 20px; }
 
+  .btn-labeled{
+    width: auto; border-radius: 20px; padding: 0 14px 0 10px; gap: 6px;
+    font-size: 13px; font-weight: 500;
+  }
+  .btn-labeled svg{ width: 14px; height: 14px; }
+
   .btn.recording{ background: rgba(220,38,38,0.16); color: #b91c1c; animation: recPulse 1.2s ease-in-out infinite; }
   @keyframes recPulse{
     0%, 100%{ box-shadow: 0 0 0 0 rgba(220,38,38,0.35); }
@@ -138,8 +144,7 @@
     width: 80px; accent-color: #7c3aed; cursor: pointer;
   }
 
-  /* Botón de volumen: el slider vive en un popover que aparece al
-     tocar el ícono, para no ocupar un lugar fijo en la toolbar. */
+  /* Grupo botón + popover (usado por el selector de color). */
   .tool-group{ position: relative; }
   .popover{
     position: absolute; bottom: 54px; left: 50%; transform: translateX(-50%);
@@ -227,28 +232,29 @@
     </svg>
   </button>
 
-  <button class="btn" id="recordBtn" title="Grabar esta sesión (video + audio) y compartirla" aria-label="Grabar sesión">
+  <button class="btn btn-labeled" id="recordBtn" title="Grabar esta sesión (video + audio) y compartirla" aria-label="Grabar sesión">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="12" cy="12" r="7" fill="currentColor" stroke="none"></circle>
     </svg>
+    <span>Grabar</span>
   </button>
 
-  <div class="tool-group">
-    <button class="btn" id="muteBtn" title="Volumen" aria-label="Volumen">
-      <svg id="iconSound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="4 9 9 9 13 5 13 19 9 15 4 15 4 9"></polygon>
-        <path d="M16.5 8.5a5 5 0 0 1 0 7"></path>
-        <path d="M19 6a9 9 0 0 1 0 12"></path>
-      </svg>
-      <svg id="iconMute" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-        <polygon points="4 9 9 9 13 5 13 19 9 15 4 15 4 9"></polygon>
-        <line x1="16" y1="9" x2="22" y2="15"></line>
-        <line x1="22" y1="9" x2="16" y2="15"></line>
-      </svg>
-    </button>
-    <div class="popover" id="volumePopover" hidden>
-      <input type="range" id="volumeRange" min="0" max="100" value="80" step="1">
-    </div>
+  <button class="btn" id="muteBtn" title="Silenciar / activar sonido" aria-label="Silenciar / activar sonido">
+    <svg id="iconSound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="4 9 9 9 13 5 13 19 9 15 4 15 4 9"></polygon>
+      <path d="M16.5 8.5a5 5 0 0 1 0 7"></path>
+      <path d="M19 6a9 9 0 0 1 0 12"></path>
+    </svg>
+    <svg id="iconMute" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+      <polygon points="4 9 9 9 13 5 13 19 9 15 4 15 4 9"></polygon>
+      <line x1="16" y1="9" x2="22" y2="15"></line>
+      <line x1="22" y1="9" x2="16" y2="15"></line>
+    </svg>
+  </button>
+
+  <div class="control-wrap">
+    <label for="volumeRange">Volumen</label>
+    <input type="range" id="volumeRange" min="0" max="100" value="80" step="1">
   </div>
 
   <div class="control-wrap">
@@ -894,7 +900,6 @@
   const muteBtn = document.getElementById('muteBtn');
   const iconSound = document.getElementById('iconSound');
   const iconMute = document.getElementById('iconMute');
-  const volumePopover = document.getElementById('volumePopover');
   const volumeRange = document.getElementById('volumeRange');
   const reverbRange = document.getElementById('reverbRange');
   const delayRange = document.getElementById('delayRange');
@@ -929,21 +934,26 @@
     isDrawing = false;
   });
 
-  // El ícono de sonido abre/cierra un pequeño popover con el slider de
-  // volumen, en vez de ocupar un control fijo en la toolbar.
   function updateSoundIcon(){
     const muted = masterVolume <= 0;
     iconSound.style.display = muted ? 'none' : '';
     iconMute.style.display = muted ? '' : 'none';
   }
 
-  muteBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    volumePopover.hidden = !volumePopover.hidden;
-  });
-  const volumeGroup = muteBtn.closest('.tool-group');
-  document.addEventListener('click', (e) => {
-    if (!volumePopover.hidden && !volumeGroup.contains(e.target)) volumePopover.hidden = true;
+  // El botón silencia/reactiva de un toque, recordando el volumen previo
+  // para restaurarlo; el slider de al lado queda siempre visible para
+  // ajustes finos rápidos.
+  let volumeBeforeMute = masterVolume;
+  muteBtn.addEventListener('click', () => {
+    if (masterVolume > 0){
+      volumeBeforeMute = masterVolume;
+      masterVolume = 0;
+    } else {
+      masterVolume = volumeBeforeMute || 0.8;
+    }
+    volumeRange.value = Math.round(masterVolume * 100);
+    if (masterGain) masterGain.gain.value = masterVolume;
+    updateSoundIcon();
   });
 
   // Selector de color/timbre: un swatch por color de STYLES, más uno
