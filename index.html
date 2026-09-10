@@ -144,32 +144,13 @@
     width: 80px; accent-color: #7c3aed; cursor: pointer;
   }
 
-  /* Grupo botón + popover (usado por el selector de color). */
-  .tool-group{ position: relative; }
-  .popover{
-    position: absolute; bottom: 54px; left: 50%; transform: translateX(-50%);
-    display: flex; align-items: center;
-    padding: 10px 14px; border-radius: 20px;
-    background: var(--ui-bg); border: 1px solid var(--ui-border);
-    box-shadow: 0 4px 18px rgba(0,0,0,0.08);
-    backdrop-filter: blur(6px);
-  }
-  .popover[hidden]{ display: none; }
-  .popover input[type=range]{ width: 120px; accent-color: #7c3aed; cursor: pointer; }
-
   /* Selector de color/timbre: por defecto los trazos rotan de color
-     solos, pero se puede fijar uno (p.ej. para que toda una obra suene
-     con un solo synth). */
+     solos (arcoíris); cada toque en el botón avanza al siguiente color
+     fijo, y vuelve a automático al dar la vuelta completa. */
   .color-dot{
     width: 20px; height: 20px; border-radius: 50%;
     border: 1px solid rgba(0,0,0,0.15);
   }
-  .popover.swatches{ gap: 7px; }
-  .swatch{
-    width: 26px; height: 26px; border-radius: 50%; flex: none;
-    border: 2px solid transparent; padding: 0; cursor: pointer;
-  }
-  .swatch.selected{ border-color: #141414; }
 </style>
 </head>
 <body>
@@ -218,12 +199,9 @@
     </svg>
   </button>
 
-  <div class="tool-group">
-    <button class="btn" id="colorBtn" title="Elegir color y timbre" aria-label="Elegir color y timbre">
-      <span class="color-dot" id="colorDot"></span>
-    </button>
-    <div class="popover swatches" id="colorPopover" hidden></div>
-  </div>
+  <button class="btn" id="colorBtn" title="Automático: cada trazo rota de color — tocá para fijar uno" aria-label="Color y timbre">
+    <span class="color-dot" id="colorDot"></span>
+  </button>
 
   <button class="btn" id="eraserBtn" title="Goma: borra la parte del trazo que toques" aria-label="Herramienta goma">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -973,7 +951,6 @@
   const pixelBtn = document.getElementById('pixelBtn');
   const colorBtn = document.getElementById('colorBtn');
   const colorDot = document.getElementById('colorDot');
-  const colorPopover = document.getElementById('colorPopover');
   const eraserBtn = document.getElementById('eraserBtn');
   const clearBtn = document.getElementById('clearBtn');
   const muteBtn = document.getElementById('muteBtn');
@@ -1038,44 +1015,28 @@
     updateSoundIcon();
   });
 
-  // Selector de color/timbre: un swatch por color de STYLES, más uno
-  // "automático" (degradé) que vuelve a la rotación normal.
+  // Selector de color/timbre simplificado: un solo botón, sin popover.
+  // Cada toque avanza al siguiente estado — automático (arcoíris,
+  // rota solo) y después cada color fijo — y da la vuelta al llegar
+  // al final. Así queda "a mano" con un solo toque, y por defecto
+  // arranca en automático.
   const AUTO_GRADIENT = 'conic-gradient(from 0deg,#7c3aed,#f97316,#16a34a,#dc2626,#2563eb,#eab308,#db2777,#7c3aed)';
+  const colorStates = [null, ...STYLES]; // null = automático
+  let colorStateIndex = 0;
 
-  function selectDrawStyle(style, btnEl){
+  function applyColorState(){
+    const style = colorStates[colorStateIndex];
     styleOverride = style;
-    colorPopover.querySelectorAll('.swatch').forEach((el) => el.classList.toggle('selected', el === btnEl));
     colorDot.style.background = style ? style.color : AUTO_GRADIENT;
+    colorBtn.title = style
+      ? `Color fijo (${style.type}) — tocá para el siguiente`
+      : 'Automático: cada trazo rota de color — tocá para fijar uno';
   }
+  applyColorState();
 
-  (function buildColorSwatches(){
-    const autoBtn = document.createElement('button');
-    autoBtn.type = 'button';
-    autoBtn.className = 'swatch selected';
-    autoBtn.style.background = AUTO_GRADIENT;
-    autoBtn.title = 'Automático: cada trazo rota de color y timbre';
-    autoBtn.addEventListener('click', () => selectDrawStyle(null, autoBtn));
-    colorPopover.appendChild(autoBtn);
-
-    STYLES.forEach((style) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'swatch';
-      btn.style.background = style.color;
-      btn.title = `Dibujar siempre con este color/timbre (${style.type})`;
-      btn.addEventListener('click', () => selectDrawStyle(style, btn));
-      colorPopover.appendChild(btn);
-    });
-  })();
-  colorDot.style.background = AUTO_GRADIENT;
-
-  colorBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    colorPopover.hidden = !colorPopover.hidden;
-  });
-  const colorGroup = colorBtn.closest('.tool-group');
-  document.addEventListener('click', (e) => {
-    if (!colorPopover.hidden && !colorGroup.contains(e.target)) colorPopover.hidden = true;
+  colorBtn.addEventListener('click', () => {
+    colorStateIndex = (colorStateIndex + 1) % colorStates.length;
+    applyColorState();
   });
 
   volumeRange.addEventListener('input', () => {
