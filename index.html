@@ -113,6 +113,27 @@
   .rec-dot{ width: 8px; height: 8px; border-radius: 50%; background: #dc2626; animation: recBlink 1.2s ease-in-out infinite; }
   @keyframes recBlink{ 0%, 100%{ opacity: 1; } 50%{ opacity: 0.25; } }
 
+  /* Panel que aparece cuando la grabación queda lista: el toque en
+     "Compartir" tiene que ser un gesto del usuario fresco (no disparado
+     desde un callback async) para que Android permita abrir el share. */
+  .rec-result{
+    position: fixed; top: 18px; right: 18px; z-index: 2;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 20px;
+    background: var(--ui-bg); border: 1px solid var(--ui-border);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.1);
+    backdrop-filter: blur(6px);
+    font-size: 13px;
+  }
+  .rec-result[hidden]{ display: none; }
+  .rec-result button{
+    border: none; border-radius: 14px; padding: 6px 12px;
+    font-size: 13px; cursor: pointer;
+  }
+  .rec-result .share-btn{ background: #7c3aed; color: #fff; }
+  .rec-result .dl-btn{ background: rgba(0,0,0,0.06); color: var(--ink); }
+  .rec-result .close-btn{ background: transparent; color: #999; padding: 4px 6px; font-size: 15px; }
+
   .control-wrap{
     display:flex; align-items:center; gap:8px;
     padding: 0 6px; border-left: 1px solid var(--ui-border);
@@ -146,6 +167,13 @@
 <div class="rec-indicator" id="recIndicator" hidden>
   <span class="rec-dot"></span>
   <span id="recTime">00:00</span>
+</div>
+
+<div class="rec-result" id="recResult" hidden>
+  <span>Grabación lista</span>
+  <button class="share-btn" id="shareRecBtn">Compartir</button>
+  <button class="dl-btn" id="downloadRecBtn">Descargar</button>
+  <button class="close-btn" id="dismissRecBtn" aria-label="Cerrar">✕</button>
 </div>
 
 <button class="fab" id="fabBtn" title="Abrir herramientas" aria-label="Abrir herramientas">
@@ -875,6 +903,10 @@
   const recordBtn = document.getElementById('recordBtn');
   const recIndicator = document.getElementById('recIndicator');
   const recTimeLabel = document.getElementById('recTime');
+  const recResult = document.getElementById('recResult');
+  const shareRecBtn = document.getElementById('shareRecBtn');
+  const downloadRecBtn = document.getElementById('downloadRecBtn');
+  const dismissRecBtn = document.getElementById('dismissRecBtn');
 
   const RECORD_MAX_MS = 3 * 60 * 1000; // tope de 3 min para no comerse la memoria del celular
   let mediaRecorder = null;
@@ -884,6 +916,7 @@
   let recordStartedAt = 0;
   let recordTickHandle = null;
   let recordAutoStopHandle = null;
+  let pendingRecordingFile = null; // listo para compartir/descargar
 
   function pickRecordMimeType(){
     const candidates = [
@@ -946,7 +979,12 @@
     recIndicator.hidden = true;
   }
 
-  async function finishRecording(mimeType){
+  // Al terminar de procesar, NO se llama a navigator.share() acá: para
+  // Android, share() necesita un gesto de usuario "fresco" (un tap hecho
+  // a propósito), y este callback llega de forma asíncrona después de
+  // ese tap original — por eso mostramos un botón "Compartir" y recién
+  // ahí, dentro de ESE click, se dispara el share.
+  function finishRecording(mimeType){
     // Deja de sumar la salida de audio a la grabación y libera la cámara
     // virtual del canvas; la reproducción normal sigue sin cambios.
     compressorNode.disconnect(recordDestNode);
@@ -955,29 +993,53 @@
     const blob = new Blob(recordedChunks, { type: mimeType });
     recordedChunks = [];
     const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-    const file = new File([blob], `musigrama.${ext}`, { type: mimeType });
+    pendingRecordingFile = new File([blob], `musigrama.${ext}`, { type: mimeType });
 
-    if (navigator.canShare && navigator.canShare({ files: [file] })){
-      try {
-        await navigator.share({ files: [file], title: 'Musigrama', text: 'Mi sesión de Musigrama' });
-        return;
-      } catch (err) {
-        // el usuario canceló el share, o falló: seguimos con la descarga
-      }
+    shareRecBtn.hidden = !navigator.share;
+    recResult.hidden = false;
+  }
+
+  function hideRecResult(){
+    recResult.hidden = true;
+    pendingRecordingFile = null;
+  }
+
+  shareRecBtn.addEventListener('click', async () => {
+    if (!pendingRecordingFile) return;
+    try {
+      await navigator.share({
+        files: [pendingRecordingFile],
+        title: 'Musigrama',
+        text: 'Mi sesión de Musigrama',
+      });
+      hideRecResult();
+    } catch (err) {
+      // el usuario canceló el share, o el dispositivo lo rechazó: dejamos
+      // el panel abierto para que pueda usar "Descargar" en su lugar.
     }
-    const url = URL.createObjectURL(blob);
+  });
+
+  downloadRecBtn.addEventListener('click', () => {
+    if (!pendingRecordingFile) return;
+    const url = URL.createObjectURL(pendingRecordingFile);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `musigrama.${ext}`;
+    a.download = pendingRecordingFile.name;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-  }
+    hideRecResult();
+  });
+
+  dismissRecBtn.addEventListener('click', hideRecResult);
 
   recordBtn.addEventListener('click', () => {
     if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
-    else startRecording();
+    else {
+      hideRecResult();
+      startRecording();
+    }
   });
 
 })();
