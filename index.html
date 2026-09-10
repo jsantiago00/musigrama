@@ -30,10 +30,14 @@
     color: var(--ink);
   }
   /* Pantalla partida: el canvas ocupa todo el espacio que sobra y la
-     toolbar queda anclada abajo, siempre visible (no se superponen). */
+     toolbar queda anclada abajo, siempre visible (no se superponen).
+     100dvh (con 100vh como respaldo) evita que en el celular la barra
+     de direcciones del navegador desalinee el corte real. */
   body{
     display: flex; flex-direction: column;
-    height: 100vh; overflow: hidden;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
   }
   #canvasWrap{
     position: relative; flex: 1 1 auto; min-height: 0;
@@ -58,12 +62,25 @@
   .toolbar{
     flex: 0 0 auto;
     width: 100%; max-width: 640px; margin: 0 auto;
-    display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px;
-    padding: 8px 14px calc(8px + env(safe-area-inset-bottom, 0px));
+    display: flex; flex-direction: column;
     background: var(--ui-bg); border-top: 1px solid var(--ui-border);
     box-shadow: 0 -4px 18px rgba(0,0,0,0.06);
     backdrop-filter: blur(6px);
   }
+  /* Agarradero para comprimir/expandir la toolbar y liberar más canvas
+     para dibujar cuando hace falta. */
+  .toolbar-handle{
+    align-self: center; width: 100%;
+    display: flex; align-items: center; justify-content: center;
+    padding: 6px; border: none; background: transparent; cursor: pointer; color: #aaa;
+  }
+  .toolbar-handle svg{ width: 18px; height: 18px; transition: transform 0.2s ease; }
+  .toolbar.collapsed .toolbar-handle svg{ transform: rotate(180deg); }
+  .toolbar-content{
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px;
+    padding: 0 14px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+  .toolbar.collapsed .toolbar-content{ display: none; }
   .btn{
     display:flex; align-items:center; justify-content:center;
     width: 42px; height: 42px; border-radius: 50%;
@@ -165,6 +182,13 @@
 </div>
 
 <div class="toolbar" id="toolbar">
+  <button class="toolbar-handle" id="toolbarHandle" title="Comprimir/expandir herramientas" aria-label="Comprimir o expandir herramientas">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="6 9 12 15 18 9"></polyline>
+    </svg>
+  </button>
+
+  <div class="toolbar-content" id="toolbarContent">
   <button class="btn active" id="pencilBtn" title="Lápiz: dibujar trazos libres" aria-label="Herramienta lápiz">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 20h9"></path>
@@ -238,6 +262,7 @@
     <label for="speedRange">Velocidad</label>
     <input type="range" id="speedRange" min="20" max="260" value="90" step="10">
   </div>
+  </div>
 </div>
 
 <script>
@@ -269,6 +294,10 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // trabajamos siempre en coords lógicas
   }
   window.addEventListener('resize', resizeCanvas);
+  // En el celular, mostrar/ocultar la barra de direcciones cambia el
+  // viewport visual sin disparar siempre un 'resize' del window: esto
+  // asegura que el canvas se recalcule también en esos casos.
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', resizeCanvas);
   resizeCanvas();
 
   /* ============================================================
@@ -477,8 +506,15 @@
   const undoStack = [];
   const UNDO_LIMIT = 30;
 
+  // El estado de pixel art (paintedCells) es la fuente de verdad de esa
+  // herramienta, así que el snapshot guarda tanto los trazos como las
+  // celdas pintadas por separado (los trazos de pixel art se derivan de
+  // las celdas, ver "PIXEL ART" más abajo).
   function snapshotStrokes(){
-    return strokes.map(s => ({ points: s.points.slice(), style: s.style, pixelCell: s.pixelCell || null }));
+    return {
+      strokes: strokes.map(s => ({ points: s.points.slice(), style: s.style, pixelRow: s.pixelRow })),
+      cells: Array.from(paintedCells.entries()).map(([key, cell]) => [key, { col: cell.col, row: cell.row, style: cell.style }]),
+    };
   }
 
   function pushUndoSnapshot(){
@@ -491,12 +527,13 @@
     const snapshot = undoStack.pop();
     for (const stroke of strokes) for (const v of stroke.voices) voiceExit(v);
     strokes.length = 0;
-    paintedCells.clear();
-    for (const s of snapshot){
-      const restored = { points: s.points.slice(), style: s.style, voices: [], pixelCell: s.pixelCell };
+    for (const s of snapshot.strokes){
+      const restored = { points: s.points.slice(), style: s.style, voices: [] };
+      if (s.pixelRow !== undefined) restored.pixelRow = s.pixelRow;
       strokes.push(restored);
-      if (restored.pixelCell) paintedCells.set(cellKey(restored.pixelCell.col, restored.pixelCell.row), restored);
     }
+    paintedCells.clear();
+    for (const [key, cell] of snapshot.cells) paintedCells.set(key, cell);
     currentStroke = null;
     isDrawing = false;
     return true;
@@ -539,10 +576,27 @@
 
   function eraseAt(x, y){
     const r2 = ERASER_RADIUS * ERASER_RADIUS;
+
+    // Pixel art: se borra a nivel de celda (no tiene sentido "partir" una
+    // línea fusionada de varias celdas), y se reconstruyen las filas
+    // tocadas. Ver PIXEL ART más abajo.
+    const dirtyRows = new Set();
+    for (const [key, cell] of paintedCells){
+      const cx = cell.col * GRID_SIZE + GRID_SIZE / 2;
+      const cy = cell.row * GRID_SIZE + GRID_SIZE / 2;
+      const dx = cx - x, dy = cy - y;
+      if (dx * dx + dy * dy <= r2){
+        paintedCells.delete(key);
+        dirtyRows.add(cell.row);
+      }
+    }
+    for (const row of dirtyRows) rebuildPixelRow(row);
+
     for (let i = strokes.length - 1; i >= 0; i--){
       const stroke = strokes[i];
-      const pts = stroke.points;
+      if (stroke.pixelRow !== undefined) continue; // ya se manejó arriba
 
+      const pts = stroke.points;
       let touched = false;
       const pieces = [];
       let current = [];
@@ -564,7 +618,6 @@
 
       if (pieces.length === 0){
         for (const v of stroke.voices) voiceExit(v);
-        if (stroke.pixelCell) paintedCells.delete(cellKey(stroke.pixelCell.col, stroke.pixelCell.row));
         continue;
       }
       // El primer pedazo se queda con las voces activas del trazo original
@@ -581,38 +634,69 @@
     }
   }
 
-  // Modo Pixel art: en vez de un trazo libre, cada celda pintada de la
-  // grilla se guarda como un "trazo" de un solo segmento horizontal que
-  // ocupa todo el ancho de la celda. Así se reutiliza tal cual el mismo
-  // motor de audio/lectura continua que los trazos a mano alzada: el
-  // playhead la lee igual, sonando brevemente mientras la atraviesa.
-  const paintedCells = new Map(); // "col,row" -> trazo de esa celda
+  // Modo Pixel art: se pintan celdas sueltas, pero para el sonido las
+  // celdas CONTIGUAS de la misma fila y el mismo color/timbre se
+  // fusionan en un único trazo horizontal (como si fueran una línea
+  // continua) en vez de quedar cada una como un "pulso" separado — así
+  // el playhead las lee de corrido, con un glide entre ellas, igual que
+  // un trazo a mano alzada. paintedCells guarda solo los datos de cada
+  // celda (no un trazo propio); los trazos reales ("pixelRow") se
+  // recalculan por fila cada vez que se pinta o borra algo en ella.
+  const paintedCells = new Map(); // "col,row" -> { col, row, style }
 
   function cellKey(col, row){ return col + ',' + row; }
+
+  function rebuildPixelRow(row){
+    for (let i = strokes.length - 1; i >= 0; i--){
+      if (strokes[i].pixelRow === row){
+        for (const v of strokes[i].voices) voiceExit(v);
+        strokes.splice(i, 1);
+      }
+    }
+
+    const cellsInRow = [];
+    for (const cell of paintedCells.values()) if (cell.row === row) cellsInRow.push(cell);
+    cellsInRow.sort((a, b) => a.col - b.col);
+
+    const yMid = row * GRID_SIZE + GRID_SIZE / 2;
+    let i = 0;
+    while (i < cellsInRow.length){
+      let j = i;
+      // Se extiende la racha mientras las columnas sean consecutivas Y
+      // compartan color/timbre; un salto o un cambio de color corta la
+      // línea en dos trazos separados.
+      while (
+        j + 1 < cellsInRow.length &&
+        cellsInRow[j + 1].col === cellsInRow[j].col + 1 &&
+        cellsInRow[j + 1].style === cellsInRow[i].style
+      ) j++;
+
+      const colStart = cellsInRow[i].col, colEnd = cellsInRow[j].col;
+      strokes.push({
+        points: [
+          { x: colStart * GRID_SIZE + 1, y: yMid },
+          { x: (colEnd + 1) * GRID_SIZE - 1, y: yMid },
+        ],
+        style: cellsInRow[i].style,
+        voices: [],
+        pixelRow: row,
+      });
+      i = j + 1;
+    }
+  }
 
   function paintCell(col, row){
     const key = cellKey(col, row);
     if (paintedCells.has(key)) return;
-    const x0 = col * GRID_SIZE, x1 = x0 + GRID_SIZE;
-    const yMid = row * GRID_SIZE + GRID_SIZE / 2;
-    const stroke = {
-      points: [{ x: x0 + 1, y: yMid }, { x: x1 - 1, y: yMid }],
-      style: currentDrawStyle(),
-      voices: [],
-      pixelCell: { col, row },
-    };
-    strokes.push(stroke);
-    paintedCells.set(key, stroke);
+    paintedCells.set(key, { col, row, style: currentDrawStyle() });
+    rebuildPixelRow(row);
   }
 
   function removeCell(col, row){
     const key = cellKey(col, row);
-    const stroke = paintedCells.get(key);
-    if (!stroke) return;
-    for (const v of stroke.voices) voiceExit(v);
-    const idx = strokes.indexOf(stroke);
-    if (idx !== -1) strokes.splice(idx, 1);
+    if (!paintedCells.has(key)) return;
     paintedCells.delete(key);
+    rebuildPixelRow(row);
   }
 
   /* ============================================================
@@ -738,10 +822,14 @@
 
   function drawStrokes(c){
     for (const stroke of strokes){
-      if (stroke.pixelCell){
-        const { col, row } = stroke.pixelCell;
+      if (stroke.pixelRow !== undefined){
+        // Rectángulo sólido de punta a punta de la racha (sin las
+        // separaciones de celda individuales), para que se vea como una
+        // sola línea continua tal como suena.
+        const x0 = Math.min(stroke.points[0].x, stroke.points[1].x);
+        const x1 = Math.max(stroke.points[0].x, stroke.points[1].x);
         c.fillStyle = stroke.style.color;
-        c.fillRect(col * GRID_SIZE + 1, row * GRID_SIZE + 1, GRID_SIZE - 2, GRID_SIZE - 2);
+        c.fillRect(x0, stroke.pixelRow * GRID_SIZE + 1, x1 - x0, GRID_SIZE - 2);
         continue;
       }
 
@@ -922,6 +1010,8 @@
         velocidad
      ============================================================ */
   const hint = document.getElementById('hint');
+  const toolbarEl = document.getElementById('toolbar');
+  const toolbarHandle = document.getElementById('toolbarHandle');
   const pencilBtn = document.getElementById('pencilBtn');
   const pixelBtn = document.getElementById('pixelBtn');
   const colorRow = document.getElementById('colorRow');
@@ -934,6 +1024,14 @@
   const reverbRange = document.getElementById('reverbRange');
   const delayRange = document.getElementById('delayRange');
   const speedRange = document.getElementById('speedRange');
+
+  // Comprime/expande la toolbar para liberar más canvas cuando hace
+  // falta. El canvas se recalcula al toque, ya que el espacio
+  // disponible cambia al instante (sin animación de alto).
+  toolbarHandle.addEventListener('click', () => {
+    toolbarEl.classList.toggle('collapsed');
+    resizeCanvas();
+  });
 
   function setMode(newMode){
     mode = newMode;
