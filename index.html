@@ -95,6 +95,24 @@
   .btn.active{ background: rgba(220,38,38,0.14); color: #b91c1c; }
   .btn svg{ width: 20px; height: 20px; }
 
+  .btn.recording{ background: rgba(220,38,38,0.16); color: #b91c1c; animation: recPulse 1.2s ease-in-out infinite; }
+  @keyframes recPulse{
+    0%, 100%{ box-shadow: 0 0 0 0 rgba(220,38,38,0.35); }
+    50%{ box-shadow: 0 0 0 6px rgba(220,38,38,0); }
+  }
+
+  .rec-indicator{
+    position: fixed; top: 18px; right: 18px; z-index: 2;
+    display: flex; align-items: center; gap: 7px;
+    padding: 6px 12px; border-radius: 20px;
+    background: rgba(220,38,38,0.12); border: 1px solid rgba(220,38,38,0.28);
+    color: #b91c1c; font-size: 12px; font-variant-numeric: tabular-nums;
+    backdrop-filter: blur(4px);
+  }
+  .rec-indicator[hidden]{ display: none; }
+  .rec-dot{ width: 8px; height: 8px; border-radius: 50%; background: #dc2626; animation: recBlink 1.2s ease-in-out infinite; }
+  @keyframes recBlink{ 0%, 100%{ opacity: 1; } 50%{ opacity: 0.25; } }
+
   .control-wrap{
     display:flex; align-items:center; gap:8px;
     padding: 0 6px; border-left: 1px solid var(--ui-border);
@@ -124,6 +142,11 @@
 <canvas id="canvas"></canvas>
 
 <div class="hint" id="hint">Dibujá un trazo libre: al cruzar la línea central, sonará ✏️🎵</div>
+
+<div class="rec-indicator" id="recIndicator" hidden>
+  <span class="rec-dot"></span>
+  <span id="recTime">00:00</span>
+</div>
 
 <button class="fab" id="fabBtn" title="Abrir herramientas" aria-label="Abrir herramientas">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -157,6 +180,12 @@
       <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
       <path d="M10 11v6"></path><path d="M14 11v6"></path>
       <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+    </svg>
+  </button>
+
+  <button class="btn" id="recordBtn" title="Grabar esta sesión (video + audio) y compartirla" aria-label="Grabar sesión">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="7" fill="currentColor" stroke="none"></circle>
     </svg>
   </button>
 
@@ -226,6 +255,7 @@
   let masterGain = null;
   let reverbSend = null;
   let delaySend = null;
+  let compressorNode = null; // salida final del mix; de acá se toma el audio para grabar
   let masterVolume = 0.8; // 0..1, controlado por el slider de volumen (0 = silencio)
   let reverbAmount = 0.30; // 0..1, controlado por el slider "Espacio"
   let delayAmount = 0.15;  // 0..1, controlado por el slider "Eco"
@@ -264,6 +294,7 @@
     compressor.attack.value = 0.004;
     compressor.release.value = 0.2;
     masterGain.connect(compressor).connect(audioCtx.destination);
+    compressorNode = compressor;
 
     // "Espacio" (reverb): send/return con un convolver. La cantidad de
     // mezcla la controla reverbSend, ajustable con el slider "Espacio".
@@ -836,6 +867,118 @@
     playheadSpeed = Number(speedRange.value);
   });
   playheadSpeed = Number(speedRange.value);
+
+  /* ============================================================
+     9) GRABAR SESIÓN: captura el canvas + el audio final con
+     MediaRecorder nativo, y ofrece compartirlo (o descargarlo).
+     ============================================================ */
+  const recordBtn = document.getElementById('recordBtn');
+  const recIndicator = document.getElementById('recIndicator');
+  const recTimeLabel = document.getElementById('recTime');
+
+  const RECORD_MAX_MS = 3 * 60 * 1000; // tope de 3 min para no comerse la memoria del celular
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let recordDestNode = null;
+  let recordVideoStream = null;
+  let recordStartedAt = 0;
+  let recordTickHandle = null;
+  let recordAutoStopHandle = null;
+
+  function pickRecordMimeType(){
+    const candidates = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+      'video/mp4',
+    ];
+    for (const type of candidates){
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type;
+    }
+    return '';
+  }
+
+  function updateRecTime(){
+    const secs = Math.floor((performance.now() - recordStartedAt) / 1000);
+    const mm = String(Math.floor(secs / 60)).padStart(2, '0');
+    const ss = String(secs % 60).padStart(2, '0');
+    recTimeLabel.textContent = `${mm}:${ss}`;
+  }
+
+  function startRecording(){
+    if (!window.MediaRecorder || !canvas.captureStream){
+      hint.textContent = 'Este navegador no puede grabar video 😕';
+      hint.classList.remove('hidden');
+      return;
+    }
+    ensureAudio();
+
+    const mimeType = pickRecordMimeType();
+    recordVideoStream = canvas.captureStream(30);
+    recordDestNode = audioCtx.createMediaStreamDestination();
+    compressorNode.connect(recordDestNode); // se suma a la salida normal, no la reemplaza
+
+    const stream = new MediaStream([
+      ...recordVideoStream.getVideoTracks(),
+      ...recordDestNode.stream.getAudioTracks(),
+    ]);
+
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = () => finishRecording(mediaRecorder.mimeType || mimeType || 'video/webm');
+    mediaRecorder.start();
+
+    recordStartedAt = performance.now();
+    recordBtn.classList.add('recording');
+    recIndicator.hidden = false;
+    updateRecTime();
+    recordTickHandle = setInterval(updateRecTime, 500);
+    recordAutoStopHandle = setTimeout(stopRecording, RECORD_MAX_MS);
+  }
+
+  function stopRecording(){
+    if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+    mediaRecorder.stop();
+    clearInterval(recordTickHandle);
+    clearTimeout(recordAutoStopHandle);
+    recordBtn.classList.remove('recording');
+    recIndicator.hidden = true;
+  }
+
+  async function finishRecording(mimeType){
+    // Deja de sumar la salida de audio a la grabación y libera la cámara
+    // virtual del canvas; la reproducción normal sigue sin cambios.
+    compressorNode.disconnect(recordDestNode);
+    recordVideoStream.getTracks().forEach((t) => t.stop());
+
+    const blob = new Blob(recordedChunks, { type: mimeType });
+    recordedChunks = [];
+    const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const file = new File([blob], `musigrama.${ext}`, { type: mimeType });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })){
+      try {
+        await navigator.share({ files: [file], title: 'Musigrama', text: 'Mi sesión de Musigrama' });
+        return;
+      } catch (err) {
+        // el usuario canceló el share, o falló: seguimos con la descarga
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `musigrama.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  recordBtn.addEventListener('click', () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
+    else startRecording();
+  });
 
 })();
 </script>
