@@ -133,6 +133,7 @@
   .rec-result .share-btn{ background: #7c3aed; color: #fff; }
   .rec-result .dl-btn{ background: rgba(0,0,0,0.06); color: var(--ink); }
   .rec-result .close-btn{ background: transparent; color: #999; padding: 4px 6px; font-size: 15px; }
+  .rec-result span{ max-width: 44vw; }
 
   .control-wrap{
     display:flex; align-items:center; gap:8px;
@@ -170,7 +171,7 @@
 </div>
 
 <div class="rec-result" id="recResult" hidden>
-  <span>Grabación lista</span>
+  <span id="recResultText">Grabación lista</span>
   <button class="share-btn" id="shareRecBtn">Compartir</button>
   <button class="dl-btn" id="downloadRecBtn">Descargar</button>
   <button class="close-btn" id="dismissRecBtn" aria-label="Cerrar">✕</button>
@@ -904,6 +905,7 @@
   const recIndicator = document.getElementById('recIndicator');
   const recTimeLabel = document.getElementById('recTime');
   const recResult = document.getElementById('recResult');
+  const recResultText = document.getElementById('recResultText');
   const shareRecBtn = document.getElementById('shareRecBtn');
   const downloadRecBtn = document.getElementById('downloadRecBtn');
   const dismissRecBtn = document.getElementById('dismissRecBtn');
@@ -957,7 +959,12 @@
     ]);
 
     recordedChunks = [];
-    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    // Bitrate limitado: el dibujo es mayormente líneas simples sobre
+    // fondo claro (se comprime muy bien) y un archivo más chico entra
+    // más fácil dentro de los límites de tamaño para compartir/WhatsApp.
+    const recorderOptions = { videoBitsPerSecond: 1_500_000, audioBitsPerSecond: 128_000 };
+    if (mimeType) recorderOptions.mimeType = mimeType;
+    mediaRecorder = new MediaRecorder(stream, recorderOptions);
     mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
     mediaRecorder.onstop = () => finishRecording(mediaRecorder.mimeType || mimeType || 'video/webm');
     mediaRecorder.start();
@@ -995,7 +1002,16 @@
     const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
     pendingRecordingFile = new File([blob], `musigrama.${ext}`, { type: mimeType });
 
-    shareRecBtn.hidden = !navigator.share;
+    // Chequeamos de verdad si este archivo se puede compartir (no solo si
+    // existe navigator.share): así avisamos de entrada si no se va a poder
+    // en vez de que el botón "Compartir" no haga nada al tocarlo.
+    const shareable = !!navigator.share &&
+      (!navigator.canShare || navigator.canShare({ files: [pendingRecordingFile] }));
+    shareRecBtn.hidden = !shareable;
+    const sizeMB = (pendingRecordingFile.size / (1024 * 1024)).toFixed(1);
+    recResultText.textContent = shareable
+      ? `Grabación lista (${sizeMB} MB)`
+      : `Grabación lista (${sizeMB} MB) — este navegador no puede compartirla directo, descargala y compartila desde tus archivos`;
     recResult.hidden = false;
   }
 
@@ -1014,8 +1030,9 @@
       });
       hideRecResult();
     } catch (err) {
-      // el usuario canceló el share, o el dispositivo lo rechazó: dejamos
-      // el panel abierto para que pueda usar "Descargar" en su lugar.
+      if (err && err.name === 'AbortError') return; // el usuario canceló el share, no es un error
+      recResultText.textContent = 'No se pudo compartir directo: ' +
+        (err && err.message ? err.message : 'error desconocido') + '. Probá "Descargar".';
     }
   });
 
