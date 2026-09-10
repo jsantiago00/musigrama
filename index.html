@@ -29,9 +29,18 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     color: var(--ink);
   }
+  /* Pantalla partida: el canvas ocupa todo el espacio que sobra y la
+     toolbar queda anclada abajo, siempre visible (no se superponen). */
+  body{
+    display: flex; flex-direction: column;
+    height: 100vh; overflow: hidden;
+  }
+  #canvasWrap{
+    position: relative; flex: 1 1 auto; min-height: 0;
+  }
   #canvas{
-    position: fixed; inset: 0;
-    width: 100vw; height: 100vh;
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
     touch-action: none; /* evita scroll/zoom del navegador al dibujar */
     cursor: crosshair;
   }
@@ -46,37 +55,14 @@
   }
   .hint.hidden{ opacity: 0; }
 
-  /* Ícono flotante: abre/cierra la toolbar para no ocupar pantalla de
-     entrada, sobre todo en el celular. */
-  .fab{
-    position: fixed; right: 18px; bottom: 18px; z-index: 2;
-    display: flex; align-items: center; justify-content: center;
-    width: 50px; height: 50px; border-radius: 50%;
-    border: none; cursor: pointer;
-    background: var(--ui-bg); border: 1px solid var(--ui-border);
-    box-shadow: 0 4px 18px rgba(0,0,0,0.12);
-    backdrop-filter: blur(6px);
-    color: var(--ink);
-    transition: opacity 0.15s ease, transform 0.15s ease;
-  }
-  .fab svg{ width: 22px; height: 22px; }
-  .fab.hidden{ opacity: 0; transform: scale(0.7); pointer-events: none; }
-
   .toolbar{
-    position: fixed; bottom: 20px; left: 50%;
-    transform: translateX(-50%) translateY(12px);
+    flex: 0 0 auto;
+    width: 100%; max-width: 640px; margin: 0 auto;
     display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px;
-    padding: 10px 14px; border-radius: 28px;
-    background: var(--ui-bg); border: 1px solid var(--ui-border);
-    box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+    padding: 8px 14px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: var(--ui-bg); border-top: 1px solid var(--ui-border);
+    box-shadow: 0 -4px 18px rgba(0,0,0,0.06);
     backdrop-filter: blur(6px);
-    max-width: min(94vw, 640px);
-    opacity: 0; pointer-events: none;
-    transition: opacity 0.18s ease, transform 0.18s ease;
-  }
-  .toolbar.open{
-    opacity: 1; pointer-events: auto;
-    transform: translateX(-50%) translateY(0);
   }
   .btn{
     display:flex; align-items:center; justify-content:center;
@@ -160,32 +146,23 @@
 </head>
 <body>
 
-<canvas id="canvas"></canvas>
+<div id="canvasWrap">
+  <canvas id="canvas"></canvas>
 
-<div class="hint" id="hint">Dibujá un trazo libre: al cruzar la línea central, sonará ✏️🎵</div>
+  <div class="hint" id="hint">Dibujá un trazo libre: al cruzar la línea central, sonará ✏️🎵</div>
 
-<div class="rec-indicator" id="recIndicator" hidden>
-  <span class="rec-dot"></span>
-  <span id="recTime">00:00</span>
+  <div class="rec-indicator" id="recIndicator" hidden>
+    <span class="rec-dot"></span>
+    <span id="recTime">00:00</span>
+  </div>
+
+  <div class="rec-result" id="recResult" hidden>
+    <span id="recResultText">Grabación lista</span>
+    <button class="share-btn" id="shareRecBtn">Compartir</button>
+    <button class="dl-btn" id="downloadRecBtn">Descargar</button>
+    <button class="close-btn" id="dismissRecBtn" aria-label="Cerrar">✕</button>
+  </div>
 </div>
-
-<div class="rec-result" id="recResult" hidden>
-  <span id="recResultText">Grabación lista</span>
-  <button class="share-btn" id="shareRecBtn">Compartir</button>
-  <button class="dl-btn" id="downloadRecBtn">Descargar</button>
-  <button class="close-btn" id="dismissRecBtn" aria-label="Cerrar">✕</button>
-</div>
-
-<button class="fab" id="fabBtn" title="Abrir herramientas" aria-label="Abrir herramientas">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <line x1="4" y1="6" x2="20" y2="6"></line>
-    <circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"></circle>
-    <line x1="4" y1="12" x2="20" y2="12"></line>
-    <circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"></circle>
-    <line x1="4" y1="18" x2="20" y2="18"></line>
-    <circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"></circle>
-  </svg>
-</button>
 
 <div class="toolbar" id="toolbar">
   <button class="btn active" id="pencilBtn" title="Lápiz: dibujar trazos libres" aria-label="Herramienta lápiz">
@@ -270,16 +247,21 @@
   /* ============================================================
      1) CANVAS: setup, resize y utilidades de dibujo
      ============================================================ */
+  const canvasWrap = document.getElementById('canvasWrap');
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
 
   let W = 0, H = 0; // dimensiones lógicas (CSS px), no físicas
   const GRID_SIZE = 28; // tamaño de casillero del cuaderno; también la grilla del modo pixel art
 
+  // El tamaño del canvas es el del contenedor #canvasWrap (todo el
+  // espacio que le deja la toolbar anclada abajo), no el de la ventana
+  // completa, ya que ahora la pantalla queda partida en dos.
   function resizeCanvas(){
     const dpr = window.devicePixelRatio || 1;
-    W = window.innerWidth;
-    H = window.innerHeight;
+    const rect = canvasWrap.getBoundingClientRect();
+    W = rect.width;
+    H = rect.height;
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
     canvas.style.width = W + 'px';
@@ -839,7 +821,6 @@
   let isErasing = false;
   let isPixelPainting = false;
   let lastPixelCell = null; // evita repintar la misma celda mientras se arrastra
-  let toolbarOpen = false; // la toolbar arranca colapsada; se abre con el ícono flotante
 
   // El botón derecho del mouse actúa como goma al instante, sin tener que
   // cambiar de herramienta: mientras se mantiene apretado borra, y al
@@ -848,13 +829,6 @@
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
   canvas.addEventListener('pointerdown', (e) => {
-    // Si la toolbar está abierta, el primer toque afuera solo la cierra
-    // (no dibuja de paso), como un menú que se descarta al tocar afuera.
-    if (toolbarOpen){
-      setToolbarOpen(false);
-      return;
-    }
-
     canvas.setPointerCapture(e.pointerId);
     const { x, y } = getPos(e);
 
@@ -948,8 +922,6 @@
         velocidad
      ============================================================ */
   const hint = document.getElementById('hint');
-  const fabBtn = document.getElementById('fabBtn');
-  const toolbarEl = document.getElementById('toolbar');
   const pencilBtn = document.getElementById('pencilBtn');
   const pixelBtn = document.getElementById('pixelBtn');
   const colorRow = document.getElementById('colorRow');
@@ -962,18 +934,6 @@
   const reverbRange = document.getElementById('reverbRange');
   const delayRange = document.getElementById('delayRange');
   const speedRange = document.getElementById('speedRange');
-
-  // El ícono flotante abre la toolbar; se cierra tocando el canvas
-  // (ver el pointerdown de la sección 7) o el propio botón de nuevo.
-  function setToolbarOpen(open){
-    toolbarOpen = open;
-    toolbarEl.classList.toggle('open', open);
-    fabBtn.classList.toggle('hidden', open);
-  }
-  fabBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    setToolbarOpen(true);
-  });
 
   function setMode(newMode){
     mode = newMode;
