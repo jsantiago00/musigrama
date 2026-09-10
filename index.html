@@ -402,11 +402,39 @@
   }
 
   /* ============================================================
-     4) ESTADO DE DIBUJO (trazos libres)
+     4) ESTADO DE DIBUJO (trazos libres) y DESHACER
      ============================================================ */
   const strokes = []; // { points:[{x,y}], style, voices:[] }
   let currentStroke = null;
   let isDrawing = false;
+
+  // Deshacer por snapshot: antes de cada acción "de un gesto" (un trazo
+  // nuevo, un arrastre de goma, un borrado total) guardamos una foto de
+  // los trazos tal como estaban. Deshacer simplemente restaura la última
+  // foto guardada — así un solo undo revierte el gesto completo, no cada
+  // punto suelto.
+  const undoStack = [];
+  const UNDO_LIMIT = 30;
+
+  function snapshotStrokes(){
+    return strokes.map(s => ({ points: s.points.slice(), style: s.style }));
+  }
+
+  function pushUndoSnapshot(){
+    undoStack.push(snapshotStrokes());
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  }
+
+  function undo(){
+    if (undoStack.length === 0) return false;
+    const snapshot = undoStack.pop();
+    for (const stroke of strokes) for (const v of stroke.voices) voiceExit(v);
+    strokes.length = 0;
+    for (const s of snapshot) strokes.push({ points: s.points.slice(), style: s.style, voices: [] });
+    currentStroke = null;
+    isDrawing = false;
+    return true;
+  }
 
   const MIN_POINT_DIST = 2.5; // px mínimos entre puntos para no saturar
 
@@ -660,6 +688,7 @@
     const { x, y } = getPos(e);
 
     if (e.button === 2){
+      pushUndoSnapshot();
       rightClickErasing = true;
       canvas.classList.add('erasing');
       eraseAt(x, y);
@@ -667,9 +696,11 @@
     }
 
     if (mode === 'erase'){
+      pushUndoSnapshot();
       isErasing = true;
       eraseAt(x, y);
     } else {
+      pushUndoSnapshot();
       startStroke(x, y);
     }
   });
@@ -700,6 +731,26 @@
   canvas.addEventListener('pointerup', stopInteraction);
   canvas.addEventListener('pointercancel', stopInteraction);
   canvas.addEventListener('pointerleave', stopInteraction);
+
+  // Deshacer con Ctrl+Z / Cmd+Z (teclado, para desktop).
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'){
+      e.preventDefault();
+      undo();
+    }
+  });
+
+  // Botón "atrás" del celular como deshacer: empujamos un estado extra
+  // en el historial para poder "atraparlo" con popstate. Si hay algo
+  // para deshacer, deshacemos y volvemos a armar la trampa para el
+  // próximo "atrás". Si no queda nada, dejamos que el "atrás" funcione
+  // normal (cierra la app o vuelve a la página anterior).
+  if (window.history && window.history.pushState){
+    history.pushState({ musicagrama: true }, '');
+    window.addEventListener('popstate', () => {
+      if (undo()) history.pushState({ musicagrama: true }, '');
+    });
+  }
 
   /* ============================================================
      8) UI: herramientas (lápiz/goma), limpiar, volumen, espacio/eco,
@@ -742,6 +793,7 @@
   eraserBtn.addEventListener('click', () => setMode('erase'));
 
   clearBtn.addEventListener('click', () => {
+    pushUndoSnapshot();
     for (const stroke of strokes) for (const v of stroke.voices) voiceExit(v);
     strokes.length = 0;
     currentStroke = null;
