@@ -1,6 +1,6 @@
 {
-  "name": "Musicagrama",
-  "short_name": "Musicagrama",
+  "name": "Musigrama",
+  "short_name": "Musigrama",
   "description": "Secuenciador musical de dibujo libre",
   "start_url": "./index.html",
   "scope": "./",
