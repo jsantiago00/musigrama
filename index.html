@@ -52,14 +52,37 @@
   }
   .hint.hidden{ opacity: 0; }
 
+  /* Ícono flotante: abre/cierra la toolbar para no ocupar pantalla de
+     entrada, sobre todo en el celular. */
+  .fab{
+    position: fixed; right: 18px; bottom: 18px; z-index: 2;
+    display: flex; align-items: center; justify-content: center;
+    width: 50px; height: 50px; border-radius: 50%;
+    border: none; cursor: pointer;
+    background: var(--ui-bg); border: 1px solid var(--ui-border);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.12);
+    backdrop-filter: blur(6px);
+    color: var(--ink);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+  }
+  .fab svg{ width: 22px; height: 22px; }
+  .fab.hidden{ opacity: 0; transform: scale(0.7); pointer-events: none; }
+
   .toolbar{
-    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    position: fixed; bottom: 20px; left: 50%;
+    transform: translateX(-50%) translateY(12px);
     display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px;
     padding: 10px 14px; border-radius: 28px;
     background: var(--ui-bg); border: 1px solid var(--ui-border);
     box-shadow: 0 4px 18px rgba(0,0,0,0.08);
     backdrop-filter: blur(6px);
     max-width: min(94vw, 640px);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+  .toolbar.open{
+    opacity: 1; pointer-events: auto;
+    transform: translateX(-50%) translateY(0);
   }
   .btn{
     display:flex; align-items:center; justify-content:center;
@@ -102,7 +125,18 @@
 
 <div class="hint" id="hint">Dibujá un trazo libre: al cruzar la línea central, sonará ✏️🎵</div>
 
-<div class="toolbar">
+<button class="fab" id="fabBtn" title="Abrir herramientas" aria-label="Abrir herramientas">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="4" y1="6" x2="20" y2="6"></line>
+    <circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"></circle>
+    <line x1="4" y1="12" x2="20" y2="12"></line>
+    <circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"></circle>
+    <line x1="4" y1="18" x2="20" y2="18"></line>
+    <circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"></circle>
+  </svg>
+</button>
+
+<div class="toolbar" id="toolbar">
   <button class="btn active" id="pencilBtn" title="Lápiz: dibujar trazos libres" aria-label="Herramienta lápiz">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 20h9"></path>
@@ -606,6 +640,7 @@
 
   let mode = 'draw'; // 'draw' | 'erase'
   let isErasing = false;
+  let toolbarOpen = false; // la toolbar arranca colapsada; se abre con el ícono flotante
 
   // El botón derecho del mouse actúa como goma al instante, sin tener que
   // cambiar de herramienta: mientras se mantiene apretado borra, y al
@@ -614,6 +649,13 @@
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
   canvas.addEventListener('pointerdown', (e) => {
+    // Si la toolbar está abierta, el primer toque afuera solo la cierra
+    // (no dibuja de paso), como un menú que se descarta al tocar afuera.
+    if (toolbarOpen){
+      setToolbarOpen(false);
+      return;
+    }
+
     canvas.setPointerCapture(e.pointerId);
     const { x, y } = getPos(e);
 
@@ -664,6 +706,8 @@
         velocidad
      ============================================================ */
   const hint = document.getElementById('hint');
+  const fabBtn = document.getElementById('fabBtn');
+  const toolbarEl = document.getElementById('toolbar');
   const pencilBtn = document.getElementById('pencilBtn');
   const eraserBtn = document.getElementById('eraserBtn');
   const clearBtn = document.getElementById('clearBtn');
@@ -675,6 +719,18 @@
   const reverbRange = document.getElementById('reverbRange');
   const delayRange = document.getElementById('delayRange');
   const speedRange = document.getElementById('speedRange');
+
+  // El ícono flotante abre la toolbar; se cierra tocando el canvas
+  // (ver el pointerdown de la sección 7) o el propio botón de nuevo.
+  function setToolbarOpen(open){
+    toolbarOpen = open;
+    toolbarEl.classList.toggle('open', open);
+    fabBtn.classList.toggle('hidden', open);
+  }
+  fabBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setToolbarOpen(true);
+  });
 
   function setMode(newMode){
     mode = newMode;
